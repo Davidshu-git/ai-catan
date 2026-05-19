@@ -1,6 +1,7 @@
 node_modules
 dist
 .git
+package-lock.json
 *.log
 npm-debug.log*
 .DS_Store

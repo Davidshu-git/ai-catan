@@ -4,7 +4,7 @@
 
 import type { Board as BoardT, GameState, Hex } from '../game/types';
 import { TERRAIN_COLOR, pips } from '../game/types';
-import { INK, PAPER, PAPER_DARK, SEA_ASSET, TERRAIN_ART, TERRAIN_TILE_ASSETS } from '../art/theme';
+import { INK, PAPER, PAPER_DARK, ROBBER_ASSET, SEA_ASSET, TERRAIN_ART, TERRAIN_TILE_ASSETS } from '../art/theme';
 import {
   canBuildCity,
   canBuildRoad,
@@ -252,7 +252,7 @@ export function Board({ board, state, mode, onVertex, onEdge, onHex }: Props) {
                   x={h.cx}
                   y={h.cy + 1}
                   textAnchor="middle"
-                  fontSize={15}
+                  fontSize={13}
                   fontWeight={800}
                   fill={h.number === 6 || h.number === 8 ? '#8f2e29' : INK}
                 >
@@ -261,21 +261,25 @@ export function Board({ board, state, mode, onVertex, onEdge, onHex }: Props) {
                 {Array.from({ length: pips(h.number) }).map((_, i, arr) => (
                   <circle
                     key={i}
-                    cx={h.cx - (arr.length - 1) * 2.6 + i * 5.2}
-                    cy={h.cy + 10}
-                    r={1.7}
+                    cx={h.cx - (arr.length - 1) * 2.2 + i * 4.4}
+                    cy={h.cy + 6}
+                    r={1.5}
                     fill={h.number === 6 || h.number === 8 ? '#8f2e29' : '#4b3927'}
                   />
                 ))}
               </g>
             )}
             {state.robber === h.id && (
-              <g filter="url(#soft)" transform={`translate(${h.cx + 19}, ${h.cy - 17})`}>
-                <ellipse cx={0} cy={14} rx={13} ry={4.5} fill="rgba(0,0,0,0.32)" />
-                <path d="M -13 8 C -17 -9 -7 -17 1 -13 C 7 -19 17 -6 12 10 C 6 7 1 11 -4 8 C -7 12 -10 10 -13 8 Z" fill="#211e27" stroke={INK} strokeWidth={1.8} />
-                <circle cx={-4} cy={-4} r={2.2} fill={PAPER} />
-                <circle cx={4} cy={-6} r={2.4} fill={PAPER} />
-                <circle cx={0} cy={1} r={1.8} fill={PAPER} />
+              <g className="svg-pop" filter="url(#soft)" transform={`translate(${h.cx}, ${h.cy})`}>
+                <ellipse cx={0} cy={10} rx={9} ry={2.6} fill="rgba(0,0,0,0.34)" />
+                <image
+                  href={ROBBER_ASSET}
+                  x={-11}
+                  y={-30}
+                  width={22}
+                  height={40}
+                  preserveAspectRatio="xMidYMid meet"
+                />
               </g>
             )}
           </g>
