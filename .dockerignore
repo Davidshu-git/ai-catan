@@ -1,0 +1,9 @@
+node_modules
+dist
+.git
+*.log
+npm-debug.log*
+.DS_Store
+
+sim.ts
+tsconfig.node.json

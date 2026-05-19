@@ -1,0 +1,10 @@
+services:
+  catan:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: catan-web:latest
+    container_name: catan
+    ports:
+      - "8088:80"
+    restart: unless-stopped
