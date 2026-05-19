@@ -4,7 +4,7 @@
 
 import type { Board as BoardT, GameState, Hex } from '../game/types';
 import { TERRAIN_COLOR, pips } from '../game/types';
-import { INK, PAPER, PAPER_DARK, TERRAIN_ART, TERRAIN_TILE_ASSETS } from '../art/theme';
+import { INK, PAPER, PAPER_DARK, SEA_ASSET, TERRAIN_ART, TERRAIN_TILE_ASSETS } from '../art/theme';
 import {
   canBuildCity,
   canBuildRoad,
@@ -194,18 +194,16 @@ export function Board({ board, state, mode, onVertex, onEdge, onHex }: Props) {
         ))}
       </defs>
 
+      {/* 海洋背景：手绘哥特墨线海面贴图；渐变作为加载失败/兜底底色 */}
       <rect x={0} y={0} width={board.width} height={board.height} fill="url(#sea)" />
-      {/* 海浪 */}
-      {Array.from({ length: 7 }).map((_, i) => (
-        <path
-          key={`w-${i}`}
-          d={`M 0 ${60 + i * ((board.height - 80) / 6)} q 22 -10 44 0 t 44 0 t 44 0 t 44 0 t 44 0 t 44 0 t 44 0 t 44 0 t 44 0 t 44 0 t 44 0 t 44 0`}
-          stroke="rgba(239,227,200,0.18)"
-          strokeWidth={2.2}
-          fill="none"
-          strokeLinecap="round"
-        />
-      ))}
+      <image
+        href={SEA_ASSET}
+        x={0}
+        y={0}
+        width={board.width}
+        height={board.height}
+        preserveAspectRatio="xMidYMid slice"
+      />
 
       {/* 地块 */}
       {board.hexes.map((h) => {

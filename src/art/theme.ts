@@ -66,6 +66,9 @@ export const TERRAIN_TILE_ASSETS: Record<Terrain, string> = {
   desert: '/assets/terrain-desert.png',
 };
 
+/** 棋盘海洋背景贴图（手绘哥特墨线海面） */
+export const SEA_ASSET = '/assets/sea.png';
+
 export const RESOURCE_ART: Record<Resource, string> = {
   wood: TERRAIN_ART.wood.base,
   brick: TERRAIN_ART.brick.base,
