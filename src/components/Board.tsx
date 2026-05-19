@@ -4,7 +4,17 @@
 
 import type { Board as BoardT, GameState, Hex } from '../game/types';
 import { TERRAIN_COLOR, pips } from '../game/types';
-import { INK, PAPER, PAPER_DARK, ROBBER_ASSET, SEA_ASSET, TERRAIN_ART, TERRAIN_TILE_ASSETS } from '../art/theme';
+import {
+  COASTLINE_ASSET,
+  INK,
+  PAPER,
+  PAPER_DARK,
+  PORT_BADGE_ASSET,
+  ROBBER_ASSET,
+  SEA_ASSET,
+  TERRAIN_ART,
+  TERRAIN_TILE_ASSETS,
+} from '../art/theme';
 import {
   canBuildCity,
   canBuildRoad,
@@ -142,6 +152,8 @@ export function Board({ board, state, mode, onVertex, onEdge, onHex }: Props) {
   const p = state.current;
   const bcx = board.width / 2;
   const bcy = board.height / 2;
+  // 海岸线环：以棋盘中心为轴放大并旋转 30°，对齐六边形岛屿并包住外圈
+  const coastSize = Math.max(board.width, board.height) * 1.06;
 
   const vertexLegal = (v: number): boolean => {
     if (mode !== 'settlement' && mode !== 'city') return false;
@@ -203,6 +215,15 @@ export function Board({ board, state, mode, onVertex, onEdge, onHex }: Props) {
         width={board.width}
         height={board.height}
         preserveAspectRatio="xMidYMid slice"
+      />
+      <image
+        href={COASTLINE_ASSET}
+        x={bcx - coastSize / 2}
+        y={bcy - coastSize / 2}
+        width={coastSize}
+        height={coastSize}
+        preserveAspectRatio="xMidYMid meet"
+        transform={`rotate(30 ${bcx} ${bcy})`}
       />
 
       {/* 地块 */}
@@ -293,13 +314,30 @@ export function Board({ board, state, mode, onVertex, onEdge, onHex }: Props) {
           const dx = v.x - bcx;
           const dy = v.y - bcy;
           const d = Math.hypot(dx, dy) || 1;
-          const px = v.x + (dx / d) * 18;
-          const py = v.y + (dy / d) * 18;
+          const px = v.x + (dx / d) * 25;
+          const py = v.y + (dy / d) * 25;
           return (
             <g key={`port-${v.id}`} filter="url(#soft)">
               <line x1={v.x} y1={v.y} x2={px} y2={py} stroke={PAPER_DARK} strokeWidth={2.5} strokeLinecap="round" />
-              <path d={`M ${px - 14} ${py - 9} q ${13} -6 ${28} 0 l -3 19 q -11 5 -24 0 Z`} fill={PAPER} stroke={INK} strokeWidth={1.8} />
-              <text x={px} y={py + 4} textAnchor="middle" fontSize={11} fontWeight={800} fill={INK}>
+              <image
+                href={PORT_BADGE_ASSET}
+                x={px - 24}
+                y={py - 13}
+                width={48}
+                height={26}
+                preserveAspectRatio="xMidYMid meet"
+              />
+              <text
+                x={px}
+                y={py + 4}
+                textAnchor="middle"
+                fontSize={10}
+                fontWeight={900}
+                fill={INK}
+                stroke={PAPER}
+                strokeWidth={0.9}
+                paintOrder="stroke"
+              >
                 {PORT_SHORT[v.port!]}
               </text>
             </g>
