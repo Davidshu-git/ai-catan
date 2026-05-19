@@ -3,14 +3,15 @@
 // ============================================================
 
 import { generateBoard } from './board';
+import { PLAYER_ART_COLORS } from '../art/theme';
 import type { DevCard, FullGame, GameState, Player } from './types';
 import { emptyRes } from './types';
 
 const PLAYER_DEFS = [
-  { name: '你', color: '#e5484d', isAI: false },
-  { name: 'AI · 蓝', color: '#4aa3ff', isAI: true },
-  { name: 'AI · 绿', color: '#3ecf6a', isAI: true },
-  { name: 'AI · 橙', color: '#e8a13a', isAI: true },
+  { name: '你', color: PLAYER_ART_COLORS[0], isAI: false },
+  { name: 'AI · 蓝', color: PLAYER_ART_COLORS[1], isAI: true },
+  { name: 'AI · 绿', color: PLAYER_ART_COLORS[2], isAI: true },
+  { name: 'AI · 橙', color: PLAYER_ART_COLORS[3], isAI: true },
 ];
 
 function shuffle<T>(arr: T[]): T[] {

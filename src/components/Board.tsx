@@ -1,9 +1,10 @@
 // ============================================================
-// SVG 棋盘渲染与交互（明亮扁平卡通风）
+// SVG 棋盘渲染与交互（手绘哥特纸片风）
 // ============================================================
 
 import type { Board as BoardT, GameState, Hex } from '../game/types';
 import { TERRAIN_COLOR, pips } from '../game/types';
+import { INK, PAPER, PAPER_DARK, TERRAIN_ART, TERRAIN_TILE_ASSETS } from '../art/theme';
 import {
   canBuildCity,
   canBuildRoad,
@@ -42,19 +43,18 @@ function shade(hex: string, f: number): string {
 function Motif({ h }: { h: Hex }) {
   const x = h.cx;
   const y = h.cy;
-  const dark = shade(TERRAIN_COLOR[h.terrain], 0.7);
+  const art = TERRAIN_ART[h.terrain];
   switch (h.terrain) {
     case 'wood': {
       const tree = (tx: number, ty: number, s: number) => (
         <g key={`${tx},${ty}`}>
-          <rect x={tx - 2 * s} y={ty} width={4 * s} height={9 * s} rx={1.5} fill="#7a4a25" />
-          <circle cx={tx} cy={ty - 3 * s} r={9 * s} fill="#2f9d4e" />
-          <circle cx={tx - 5 * s} cy={ty + 2 * s} r={6 * s} fill="#37ad59" />
-          <circle cx={tx + 5 * s} cy={ty + 2 * s} r={6 * s} fill="#37ad59" />
+          <path d={`M ${tx - 2 * s} ${ty + 13 * s} C ${tx - 5 * s} ${ty + 2 * s} ${tx + 5 * s} ${ty - 8 * s} ${tx + 1 * s} ${ty - 22 * s}`} stroke="#3a2318" strokeWidth={4 * s} fill="none" strokeLinecap="round" />
+          <path d={`M ${tx} ${ty - 10 * s} C ${tx - 15 * s} ${ty - 19 * s} ${tx - 9 * s} ${ty - 31 * s} ${tx + 1 * s} ${ty - 25 * s} C ${tx + 13 * s} ${ty - 33 * s} ${tx + 19 * s} ${ty - 15 * s} ${tx + 6 * s} ${ty - 10 * s} Z`} fill={art.light} stroke={INK} strokeWidth={1.8} strokeLinejoin="round" />
+          <path d={`M ${tx - 12 * s} ${ty - 17 * s} q ${8 * s} ${5 * s} ${16 * s} 0 M ${tx - 8 * s} ${ty - 23 * s} q ${8 * s} ${5 * s} ${18 * s} -1`} stroke={art.hatch} strokeWidth={1.2} fill="none" />
         </g>
       );
       return (
-        <g opacity={0.92}>
+        <g opacity={0.95}>
           {tree(x - 17, y - 6, 0.95)}
           {tree(x + 15, y - 10, 0.8)}
           {tree(x - 2, y + 12, 1.05)}
@@ -62,34 +62,25 @@ function Motif({ h }: { h: Hex }) {
       );
     }
     case 'brick': {
-      const rows = [0, 1, 2, 3];
       return (
         <g opacity={0.9}>
-          {rows.map((ri) =>
-            [0, 1, 2].map((ci) => (
-              <rect
-                key={`${ri}-${ci}`}
-                x={x - 24 + ci * 17 + (ri % 2) * 8}
-                y={y - 16 + ri * 9}
-                width={15}
-                height={7}
-                rx={1.5}
-                fill={shade('#e8895a', 0.92)}
-                stroke={dark}
-                strokeWidth={1}
-              />
-            )),
-          )}
+          <path d={`M ${x - 31} ${y + 15} C ${x - 19} ${y - 19} ${x + 12} ${y - 23} ${x + 31} ${y + 13} Z`} fill={art.light} stroke={INK} strokeWidth={2} />
+          {[-21, -6, 9].map((sx, i) => (
+            <path key={sx} d={`M ${x + sx} ${y + 17 - i * 4} l ${10} ${-31} l ${13} ${31}`} stroke={art.hatch} strokeWidth={1.5} fill="none" />
+          ))}
+          {[-14, -2, 10].map((oy) => (
+            <path key={oy} d={`M ${x - 26} ${y + oy} q ${20} ${-5} ${52} ${1}`} stroke={INK} strokeWidth={1.2} fill="none" opacity={0.7} />
+          ))}
         </g>
       );
     }
     case 'sheep': {
       const sheep = (sx: number, sy: number, s: number) => (
         <g key={`${sx},${sy}`}>
-          <ellipse cx={sx} cy={sy} rx={11 * s} ry={8 * s} fill="#fbf7ef" />
-          <circle cx={sx + 9 * s} cy={sy - 3 * s} r={5 * s} fill="#5a4636" />
-          <rect x={sx - 9 * s} y={sy + 5 * s} width={2.5} height={5 * s} fill="#5a4636" />
-          <rect x={sx + 6 * s} y={sy + 5 * s} width={2.5} height={5 * s} fill="#5a4636" />
+          <path d={`M ${sx - 13 * s} ${sy} C ${sx - 13 * s} ${sy - 11 * s} ${sx + 12 * s} ${sy - 12 * s} ${sx + 15 * s} ${sy - 1 * s} C ${sx + 20 * s} ${sy + 10 * s} ${sx - 9 * s} ${sy + 14 * s} ${sx - 13 * s} ${sy} Z`} fill="#d8d3c4" stroke={INK} strokeWidth={1.6} />
+          <circle cx={sx + 12 * s} cy={sy - 4 * s} r={5.5 * s} fill="#3b302c" stroke={INK} strokeWidth={1} />
+          <circle cx={sx + 13.5 * s} cy={sy - 5.2 * s} r={1.2 * s} fill="#f4ead7" />
+          <path d={`M ${sx - 8 * s} ${sy + 7 * s} l ${-2 * s} ${8 * s} M ${sx + 6 * s} ${sy + 8 * s} l ${2 * s} ${8 * s}`} stroke={INK} strokeWidth={1.7} strokeLinecap="round" />
         </g>
       );
       return (
@@ -101,7 +92,7 @@ function Motif({ h }: { h: Hex }) {
     }
     case 'wheat': {
       const stalk = (sx: number) => (
-        <g key={sx} stroke={shade('#e0a800', 0.9)} strokeWidth={2}>
+        <g key={sx} stroke={art.dark} strokeWidth={2}>
           <line x1={sx} y1={y + 16} x2={sx} y2={y - 14} />
           {[-10, -4, 2, 8].map((o) => (
             <g key={o}>
@@ -109,7 +100,7 @@ function Motif({ h }: { h: Hex }) {
               <line x1={sx} y1={y + o} x2={sx + 7} y2={y + o - 6} />
             </g>
           ))}
-          <circle cx={sx} cy={y - 16} r={3} fill="#f6d743" stroke="none" />
+          <circle cx={sx} cy={y - 16} r={2.5} fill={art.light} stroke={INK} strokeWidth={0.8} />
         </g>
       );
       return (
@@ -123,22 +114,21 @@ function Motif({ h }: { h: Hex }) {
     case 'ore': {
       return (
         <g opacity={0.92}>
-          <polygon points={`${x - 24},${y + 16} ${x - 6},${y - 16} ${x + 10},${y + 16}`} fill={shade('#8a98aa', 0.85)} />
-          <polygon points={`${x - 6},${y - 16} ${x - 12},${y + 16} ${x + 2},${y + 16}`} fill="#cfd8e3" />
-          <polygon points={`${x + 2},${y + 16} ${x + 16},${y - 4} ${x + 26},${y + 16}`} fill={shade('#8a98aa', 0.95)} />
-          <polygon points={`${x + 16},${y - 4} ${x + 11},${y + 16} ${x + 21},${y + 16}`} fill="#e3eaf2" />
+          <polygon points={`${x - 26},${y + 17} ${x - 7},${y - 24} ${x + 9},${y + 18}`} fill={art.dark} stroke={INK} strokeWidth={2} strokeLinejoin="round" />
+          <polygon points={`${x - 7},${y - 24} ${x - 12},${y + 17} ${x + 3},${y + 18}`} fill={art.light} opacity={0.75} />
+          <polygon points={`${x + 0},${y + 18} ${x + 17},${y - 7} ${x + 30},${y + 18}`} fill={art.base} stroke={INK} strokeWidth={1.8} strokeLinejoin="round" />
+          <path d={`M ${x - 17} ${y + 8} l ${17} -6 M ${x + 10} ${y + 10} l ${11} -4`} stroke="#c4ccd1" strokeWidth={1.4} />
         </g>
       );
     }
     case 'desert': {
       return (
         <g opacity={0.85}>
-          <path d={`M ${x - 26} ${y + 14} Q ${x - 10} ${y + 2} ${x + 4} ${y + 12} T ${x + 28} ${y + 10}`} stroke={shade('#e9d28c', 0.85)} strokeWidth={4} fill="none" strokeLinecap="round" />
-          <g>
-            <rect x={x - 3} y={y - 12} width={6} height={20} rx={3} fill="#5fa86b" />
-            <rect x={x - 11} y={y - 4} width={5} height={11} rx={2.5} fill="#5fa86b" />
-            <rect x={x + 6} y={y - 7} width={5} height={13} rx={2.5} fill="#5fa86b" />
-          </g>
+          <path d={`M ${x - 30} ${y + 17} Q ${x - 11} ${y + 2} ${x + 5} ${y + 12} T ${x + 31} ${y + 10}`} stroke={art.dark} strokeWidth={3} fill="none" strokeLinecap="round" />
+          <path d={`M ${x - 15} ${y + 8} c ${7} ${-12} ${20} ${-11} ${27} ${1} c ${-9} ${9} ${-19} ${10} ${-27} ${-1} Z`} fill="#d6cfb6" stroke={INK} strokeWidth={1.8} />
+          <circle cx={x - 5} cy={y + 5} r={1.5} fill={INK} />
+          <circle cx={x + 5} cy={y + 6} r={1.5} fill={INK} />
+          <path d={`M ${x - 22} ${y - 9} l ${13} ${6} M ${x - 14} ${y - 14} l ${-1} ${12} M ${x + 17} ${y - 13} l ${-9} ${12}`} stroke={INK} strokeWidth={1.5} strokeLinecap="round" />
         </g>
       );
     }
@@ -174,17 +164,28 @@ export function Board({ board, state, mode, onVertex, onEdge, onHex }: Props) {
     >
       <defs>
         <radialGradient id="sea" cx="50%" cy="45%" r="75%">
-          <stop offset="0%" stopColor="#7ed4fb" />
-          <stop offset="100%" stopColor="#3fa9e8" />
+          <stop offset="0%" stopColor="#53666c" />
+          <stop offset="58%" stopColor="#344b53" />
+          <stop offset="100%" stopColor="#1f3038" />
         </radialGradient>
         {Object.keys(TERRAIN_COLOR).map((t) => (
-          <radialGradient id={`g-${t}`} key={t} cx="42%" cy="38%" r="78%">
-            <stop offset="0%" stopColor={shade(TERRAIN_COLOR[t as keyof typeof TERRAIN_COLOR], 1.18)} />
-            <stop offset="100%" stopColor={TERRAIN_COLOR[t as keyof typeof TERRAIN_COLOR]} />
+          <radialGradient id={`g-${t}`} key={t} cx="38%" cy="30%" r="82%">
+            <stop offset="0%" stopColor={TERRAIN_ART[t as keyof typeof TERRAIN_ART].light} />
+            <stop offset="72%" stopColor={TERRAIN_ART[t as keyof typeof TERRAIN_ART].base} />
+            <stop offset="100%" stopColor={TERRAIN_ART[t as keyof typeof TERRAIN_ART].dark} />
           </radialGradient>
         ))}
-        <filter id="soft" x="-30%" y="-30%" width="160%" height="160%">
-          <feDropShadow dx="0" dy="2.5" stdDeviation="2" floodColor="#1f3a52" floodOpacity="0.35" />
+        {Object.entries(TERRAIN_ART).map(([terrain, art]) => (
+          <pattern id={`hatch-${terrain}`} key={terrain} width="11" height="11" patternUnits="userSpaceOnUse" patternTransform="rotate(-23)">
+            <path d="M 0 0 L 0 11" stroke={art.hatch} strokeWidth={1.1} opacity={0.28} />
+          </pattern>
+        ))}
+        <filter id="soft" x="-35%" y="-35%" width="170%" height="170%">
+          <feDropShadow dx="2.2" dy="4" stdDeviation="1.5" floodColor="#120f0d" floodOpacity="0.42" />
+        </filter>
+        <filter id="paper-warp" x="-8%" y="-8%" width="116%" height="116%">
+          <feTurbulence type="fractalNoise" baseFrequency="0.025" numOctaves="2" seed="9" result="noise" />
+          <feDisplacementMap in="SourceGraphic" in2="noise" scale="1.2" />
         </filter>
         {board.hexes.map((h) => (
           <clipPath id={`clip-${h.id}`} key={h.id}>
@@ -199,9 +200,10 @@ export function Board({ board, state, mode, onVertex, onEdge, onHex }: Props) {
         <path
           key={`w-${i}`}
           d={`M 0 ${60 + i * ((board.height - 80) / 6)} q 22 -10 44 0 t 44 0 t 44 0 t 44 0 t 44 0 t 44 0 t 44 0 t 44 0 t 44 0 t 44 0 t 44 0 t 44 0`}
-          stroke="rgba(255,255,255,0.16)"
-          strokeWidth={3}
+          stroke="rgba(239,227,200,0.18)"
+          strokeWidth={2.2}
           fill="none"
+          strokeLinecap="round"
         />
       ))}
 
@@ -209,33 +211,52 @@ export function Board({ board, state, mode, onVertex, onEdge, onHex }: Props) {
       {board.hexes.map((h) => {
         const legal = hexLegal(h.id);
         const pts = h.poly.map((c) => `${c.x},${c.y}`).join(' ');
+        const tileAsset = TERRAIN_TILE_ASSETS[h.terrain];
         return (
           <g
             key={`hex-${h.id}`}
             className={legal ? 'hex-clickable' : undefined}
             onClick={legal ? () => onHex(h.id) : undefined}
           >
-            <polygon points={pts} fill={`url(#g-${h.terrain})`} />
-            <g clipPath={`url(#clip-${h.id})`}>
-              <Motif h={h} />
-            </g>
+            {tileAsset ? (
+              <g clipPath={`url(#clip-${h.id})`}>
+                <polygon points={pts} fill={`url(#g-${h.terrain})`} />
+                <image
+                  href={tileAsset}
+                  x={h.cx - 69}
+                  y={h.cy - 69}
+                  width={138}
+                  height={138}
+                  preserveAspectRatio="xMidYMid slice"
+                />
+              </g>
+            ) : (
+              <>
+                <polygon points={pts} fill={`url(#g-${h.terrain})`} />
+                <g clipPath={`url(#clip-${h.id})`}>
+                  <rect x={h.cx - 58} y={h.cy - 58} width={116} height={116} fill={`url(#hatch-${h.terrain})`} />
+                  <Motif h={h} />
+                </g>
+              </>
+            )}
             <polygon
               points={pts}
               fill="none"
-              stroke={legal ? '#fff' : shade(TERRAIN_COLOR[h.terrain], 0.6)}
-              strokeWidth={legal ? 5 : 3}
+              stroke={legal ? PAPER : INK}
+              strokeWidth={legal ? 5 : 2.8}
               strokeLinejoin="round"
+              filter="url(#paper-warp)"
             />
             {h.number != null && (
               <g filter="url(#soft)">
-                <circle cx={h.cx} cy={h.cy} r={16} fill="#fff6e2" stroke="#caa667" strokeWidth={2} />
+                <circle cx={h.cx} cy={h.cy} r={16} fill={PAPER} stroke={INK} strokeWidth={2.2} />
                 <text
                   x={h.cx}
                   y={h.cy + 1}
                   textAnchor="middle"
                   fontSize={15}
                   fontWeight={800}
-                  fill={h.number === 6 || h.number === 8 ? '#d83a2f' : '#5a4326'}
+                  fill={h.number === 6 || h.number === 8 ? '#8f2e29' : INK}
                 >
                   {h.number}
                 </text>
@@ -245,18 +266,18 @@ export function Board({ board, state, mode, onVertex, onEdge, onHex }: Props) {
                     cx={h.cx - (arr.length - 1) * 2.6 + i * 5.2}
                     cy={h.cy + 10}
                     r={1.7}
-                    fill={h.number === 6 || h.number === 8 ? '#d83a2f' : '#7a5c33'}
+                    fill={h.number === 6 || h.number === 8 ? '#8f2e29' : '#4b3927'}
                   />
                 ))}
               </g>
             )}
             {state.robber === h.id && (
               <g filter="url(#soft)" transform={`translate(${h.cx + 19}, ${h.cy - 17})`}>
-                <ellipse cx={0} cy={13} rx={11} ry={4} fill="rgba(0,0,0,0.25)" />
-                <path d="M 0 -11 C 9 -11 11 -2 11 8 L -11 8 C -11 -2 -9 -11 0 -11 Z" fill="#3a3a44" />
-                <circle cx={0} cy={-8} r={6.5} fill="#2f2f38" />
-                <circle cx={-2.3} cy={-8} r={1.4} fill="#fff" />
-                <circle cx={2.3} cy={-8} r={1.4} fill="#fff" />
+                <ellipse cx={0} cy={14} rx={13} ry={4.5} fill="rgba(0,0,0,0.32)" />
+                <path d="M -13 8 C -17 -9 -7 -17 1 -13 C 7 -19 17 -6 12 10 C 6 7 1 11 -4 8 C -7 12 -10 10 -13 8 Z" fill="#211e27" stroke={INK} strokeWidth={1.8} />
+                <circle cx={-4} cy={-4} r={2.2} fill={PAPER} />
+                <circle cx={4} cy={-6} r={2.4} fill={PAPER} />
+                <circle cx={0} cy={1} r={1.8} fill={PAPER} />
               </g>
             )}
           </g>
@@ -274,9 +295,9 @@ export function Board({ board, state, mode, onVertex, onEdge, onHex }: Props) {
           const py = v.y + (dy / d) * 18;
           return (
             <g key={`port-${v.id}`} filter="url(#soft)">
-              <line x1={v.x} y1={v.y} x2={px} y2={py} stroke="#b9885a" strokeWidth={2.5} />
-              <rect x={px - 14} y={py - 11} width={28} height={22} rx={7} fill="#fff6e2" stroke="#caa667" strokeWidth={2} />
-              <text x={px} y={py + 4} textAnchor="middle" fontSize={11} fontWeight={800} fill="#7a5c33">
+              <line x1={v.x} y1={v.y} x2={px} y2={py} stroke={PAPER_DARK} strokeWidth={2.5} strokeLinecap="round" />
+              <path d={`M ${px - 14} ${py - 9} q ${13} -6 ${28} 0 l -3 19 q -11 5 -24 0 Z`} fill={PAPER} stroke={INK} strokeWidth={1.8} />
+              <text x={px} y={py + 4} textAnchor="middle" fontSize={11} fontWeight={800} fill={INK}>
                 {PORT_SHORT[v.port!]}
               </text>
             </g>
@@ -295,17 +316,17 @@ export function Board({ board, state, mode, onVertex, onEdge, onHex }: Props) {
           >
             {road && (
               <g className="svg-pop">
-                <line x1={e.x1} y1={e.y1} x2={e.x2} y2={e.y2} stroke="rgba(0,0,0,0.28)" strokeWidth={10} strokeLinecap="round" />
+                <line x1={e.x1} y1={e.y1} x2={e.x2} y2={e.y2} stroke="rgba(20,16,13,0.45)" strokeWidth={11} strokeLinecap="round" />
                 <line
                   x1={e.x1}
                   y1={e.y1}
                   x2={e.x2}
                   y2={e.y2}
                   stroke={state.players[road.owner].color}
-                  strokeWidth={7}
+                  strokeWidth={7.5}
                   strokeLinecap="round"
                 />
-                <line x1={e.x1} y1={e.y1} x2={e.x2} y2={e.y2} stroke="rgba(255,255,255,0.4)" strokeWidth={2} strokeLinecap="round" />
+                <line x1={e.x1} y1={e.y1} x2={e.x2} y2={e.y2} stroke={INK} strokeWidth={1.4} strokeLinecap="round" strokeDasharray="4 5" opacity={0.8} />
               </g>
             )}
             {legal && (
@@ -315,7 +336,7 @@ export function Board({ board, state, mode, onVertex, onEdge, onHex }: Props) {
                 y1={e.y1}
                 x2={e.x2}
                 y2={e.y2}
-                stroke="rgba(255,255,255,0.4)"
+                stroke="rgba(239,227,200,0.5)"
                 strokeWidth={9}
                 strokeLinecap="round"
               />
@@ -334,24 +355,21 @@ export function Board({ board, state, mode, onVertex, onEdge, onHex }: Props) {
             key={`v-${v.id}`}
             className={legal ? 'vertex-hit' : undefined}
             onClick={legal ? () => onVertex(v.id) : undefined}
-          >
+            >
             {bld && bld.type === 'settlement' && (
               <g className="svg-pop" filter="url(#soft)" transform={`translate(${v.x}, ${v.y})`}>
-                <rect x={-8} y={-1} width={16} height={11} rx={1.5} fill={col} stroke="#2c2014" strokeWidth={1.5} />
-                <polygon points={`-10,-1 0,-11 10,-1`} fill={shade(col || '#999', 0.75)} stroke="#2c2014" strokeWidth={1.5} strokeLinejoin="round" />
-                <rect x={-2.5} y={3} width={5} height={7} rx={1} fill="#2c2014" />
+                <path d="M -9 9 L 8 9 L 7 -2 L -7 -2 Z" fill={col} stroke={INK} strokeWidth={1.7} strokeLinejoin="round" />
+                <path d="M -11 -2 L -1 -13 L 11 -2 C 5 1 -4 1 -11 -2 Z" fill={shade(col || '#999', 0.72)} stroke={INK} strokeWidth={1.7} strokeLinejoin="round" />
+                <path d="M -8 -2 q 8 4 17 0 M -5 2 l 10 0" stroke={INK} strokeWidth={1} opacity={0.65} />
+                <rect x={-2.5} y={3} width={5} height={6.5} rx={0.8} fill={INK} />
               </g>
             )}
             {bld && bld.type === 'city' && (
               <g className="svg-pop" filter="url(#soft)" transform={`translate(${v.x}, ${v.y})`}>
-                <rect x={-11} y={-2} width={11} height={14} rx={1.5} fill={col} stroke="#2c2014" strokeWidth={1.5} />
-                <rect x={-1} y={-11} width={12} height={23} rx={1.5} fill={shade(col || '#999', 0.85)} stroke="#2c2014" strokeWidth={1.5} />
-                <polygon points={`-1,-11 5,-17 11,-11`} fill={shade(col || '#999', 0.7)} stroke="#2c2014" strokeWidth={1.5} strokeLinejoin="round" />
-                <rect x={-8} y={2} width={4} height={4} fill="#fff6e2" />
-                <rect x={2} y={-5} width={3.5} height={3.5} fill="#fff6e2" />
-                <rect x={6.5} y={-5} width={3.5} height={3.5} fill="#fff6e2" />
-                <rect x={2} y={2} width={3.5} height={3.5} fill="#fff6e2" />
-                <rect x={6.5} y={2} width={3.5} height={3.5} fill="#fff6e2" />
+                <path d="M -12 12 L -12 -2 L -7 -7 L -2 -2 L -2 12 Z" fill={col} stroke={INK} strokeWidth={1.7} strokeLinejoin="round" />
+                <path d="M -1 12 L -1 -12 L 5 -19 L 12 -12 L 12 12 Z" fill={shade(col || '#999', 0.82)} stroke={INK} strokeWidth={1.7} strokeLinejoin="round" />
+                <path d="M -8 2 l 3 0 l 0 4 l -3 0 Z M 3 -6 l 3 0 l 0 4 l -3 0 Z M 7 1 l 3 0 l 0 4 l -3 0 Z" fill={PAPER} stroke={INK} strokeWidth={0.8} />
+                <path d="M -1 -12 l 13 0 M -12 -2 l 10 0" stroke={INK} strokeWidth={1} opacity={0.65} />
               </g>
             )}
             {legal && (
@@ -360,8 +378,8 @@ export function Board({ board, state, mode, onVertex, onEdge, onHex }: Props) {
                 cx={v.x}
                 cy={v.y}
                 r={8}
-                fill="rgba(255,255,255,0.65)"
-                stroke="#fff"
+                fill="rgba(239,227,200,0.72)"
+                stroke={PAPER}
                 strokeWidth={2}
               />
             )}

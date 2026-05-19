@@ -54,13 +54,13 @@ function Die({ v }: { v: number }) {
   return (
     <svg className="die rolling" viewBox="0 0 46 46" width={46} height={46}>
       {(DIE_DOTS[v] ?? []).map(([gx, gy], i) => (
-        <circle key={i} cx={9 + gx * 14} cy={9 + gy * 14} r={4.4} fill="#3a2f28" />
+        <circle key={i} cx={9 + gx * 14} cy={9 + gy * 14} r={4.4} fill="#241d1a" />
       ))}
     </svg>
   );
 }
 
-const CONFETTI_COLORS = ['#ff9f1c', '#2ec4b6', '#ef5d60', '#4aa3ff', '#9bd96f', '#f4c93c'];
+const CONFETTI_COLORS = ['#9b3f34', '#526b3b', '#b59645', '#3e668f', '#874638', '#efe3c8'];
 
 function Confetti() {
   return (

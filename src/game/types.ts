@@ -173,20 +173,20 @@ export const RESOURCE_LABEL: Record<Resource, string> = {
 };
 
 export const TERRAIN_COLOR: Record<Terrain, string> = {
-  wood: '#3fae5a',
-  brick: '#e8895a',
-  sheep: '#9bd96f',
-  wheat: '#f4c93c',
-  ore: '#9aa7b8',
-  desert: '#f0dca0',
+  wood: '#3f5f3e',
+  brick: '#874638',
+  sheep: '#7a8655',
+  wheat: '#b59645',
+  ore: '#5d6370',
+  desert: '#bca77a',
 };
 
 export const RESOURCE_COLOR: Record<Resource, string> = {
-  wood: '#3fae5a',
-  brick: '#e8895a',
-  sheep: '#9bd96f',
-  wheat: '#f4c93c',
-  ore: '#9aa7b8',
+  wood: '#3f5f3e',
+  brick: '#874638',
+  sheep: '#7a8655',
+  wheat: '#b59645',
+  ore: '#5d6370',
 };
 
 export const DEV_LABEL: Record<DevCard, string> = {
