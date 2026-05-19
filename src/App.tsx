@@ -41,6 +41,47 @@ function ResIcon({ r, size = 14 }: { r: Resource; size?: number }) {
   );
 }
 
+const DIE_DOTS: Record<number, [number, number][]> = {
+  1: [[1, 1]],
+  2: [[0, 0], [2, 2]],
+  3: [[0, 0], [1, 1], [2, 2]],
+  4: [[0, 0], [2, 0], [0, 2], [2, 2]],
+  5: [[0, 0], [2, 0], [1, 1], [0, 2], [2, 2]],
+  6: [[0, 0], [2, 0], [0, 1], [2, 1], [0, 2], [2, 2]],
+};
+
+function Die({ v }: { v: number }) {
+  return (
+    <svg className="die rolling" viewBox="0 0 46 46" width={46} height={46}>
+      {(DIE_DOTS[v] ?? []).map(([gx, gy], i) => (
+        <circle key={i} cx={9 + gx * 14} cy={9 + gy * 14} r={4.4} fill="#3a2f28" />
+      ))}
+    </svg>
+  );
+}
+
+const CONFETTI_COLORS = ['#ff9f1c', '#2ec4b6', '#ef5d60', '#4aa3ff', '#9bd96f', '#f4c93c'];
+
+function Confetti() {
+  return (
+    <>
+      {Array.from({ length: 70 }).map((_, i) => (
+        <div
+          key={i}
+          className="confetti-piece"
+          style={{
+            left: `${Math.random() * 100}%`,
+            background: CONFETTI_COLORS[i % CONFETTI_COLORS.length],
+            animationDuration: `${2.4 + Math.random() * 2.2}s`,
+            animationDelay: `${Math.random() * 1.5}s`,
+            transform: `rotate(${Math.random() * 360}deg)`,
+          }}
+        />
+      ))}
+    </>
+  );
+}
+
 function Stepper({
   value,
   max,
@@ -190,6 +231,7 @@ export function App() {
 
       {state.phase === 'gameOver' && state.winner != null && (
         <div className="modal-bg">
+          <Confetti />
           <div className="modal">
             <h2>🏆 {state.players[state.winner].name} 获胜</h2>
             <p>
@@ -264,6 +306,24 @@ function Phase({
   const me = state.players[HUMAN];
   const isHumanTurn = state.current === HUMAN;
 
+  // 资源增加时脉冲高亮
+  const prevRes = useRef<ResMap>({ ...me.resources });
+  const [glow, setGlow] = useState<Resource[]>([]);
+  useEffect(() => {
+    const gained = RESOURCES.filter((r) => me.resources[r] > prevRes.current[r]);
+    prevRes.current = { ...me.resources };
+    if (gained.length === 0) return;
+    setGlow(gained);
+    const t = setTimeout(() => setGlow([]), 650);
+    return () => clearTimeout(t);
+  }, [
+    me.resources.wood,
+    me.resources.brick,
+    me.resources.sheep,
+    me.resources.wheat,
+    me.resources.ore,
+  ]);
+
   // 等待 AI
   const aiActing =
     !isHumanTurn &&
@@ -278,7 +338,7 @@ function Phase({
         <h2>我的资源</h2>
         <div className="res-bar">
           {RESOURCES.map((r) => (
-            <span key={r} className="res-pill">
+            <span key={r} className={`res-pill${glow.includes(r) ? ' gain' : ''}`}>
               <ResIcon r={r} />
               {me.resources[r]}
             </span>
@@ -290,8 +350,8 @@ function Phase({
         <div className="card">
           <h2>骰子</h2>
           <div className="dice">
-            <span className="die">{state.dice[0]}</span>
-            <span className="die">{state.dice[1]}</span>
+            <Die key={`d1-${state.turn}-${state.dice[0]}-${state.dice[1]}`} v={state.dice[0]} />
+            <Die key={`d2-${state.turn}-${state.dice[0]}-${state.dice[1]}`} v={state.dice[1]} />
             <span className="dice-sum">= {state.dice[0] + state.dice[1]}</span>
           </div>
         </div>
