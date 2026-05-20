@@ -57,7 +57,9 @@ server/                ← Node + socket.io 后端，持有上帝视角状态、
     actionChecker.ts   三层校验：JSON schema → 白名单 actionId → dry-run reducer 状态指纹
     ruleProvider.ts    包 aiNextAction → 反查 actionId；同时充当 LLM 失败的兜底 Provider
     mockProvider.ts    按优先级（建城 > 房屋 > 路 > 买卡 > 银行兑换 > 发展卡 > END_TURN）选 actionId
+    llmProvider.ts     调真实 LLM（MiniMax-M2.7 默认）；裸 fetch + JSON 严格输出 + 多策略解析
     controller.ts      decideAiStep：编排 catalog → view → provider → check → apply，含重试 + fallback
+  llmSmoke.ts          单次 LLM 调用冒烟（不走游戏循环，仅验证 API 链路）
   Dockerfile           生产镜像（node:20-alpine + tsx 直跑 TS）
   tsconfig.json        独立 TS 配置（include shared/ + server/）
 
@@ -111,7 +113,7 @@ docker-compose.yml     ← 两个服务：catan-server（后端）+ catan（前�
 **Provider 抽象（重要）：**
 - `rule` Provider：包 `aiNextAction`，把动作 deep-equal 反查到 `legalActions` 中的 actionId。
 - `mock` Provider：按优先级从 legalActions 里挑，不接 LLM 也能跑通整条链路；用于压测和无 API 调试。
-- `llm` Provider（占位）：第 8 步要接的真实大模型；当前回退到 rule，并打 warn。
+- `llm` Provider：调 **MiniMax-M2.7** 的 Anthropic 兼容端点（`https://api.minimaxi.com/anthropic/v1/messages`），裸 fetch（不依赖 SDK 以避兼容性麻烦）。`AbortController` 控 30-45s 超时；失败/超时由 controller 重试 + fallback 到 rule。**缺 `MINIMAX_API_KEY` 时自动降级到 rule 并打 warn**，stack 不会因此挂。
 - LLM 不直接生成 `Action`，**永远是从 server 生成的 `legalActions` 里挑 `actionId`**。这是降低乱编坐标 / 破坏状态机风险的关键设计，新增 Provider 时不要绕过这条约束。
 
 **`actionChecker.ts` 指纹的设计要点**：必须捕获仅靠"资源总数 / 建筑数"看不出的小变化——`devPlayed` / `freeRoads` / 每玩家的 `devCards.length` + `knightsPlayed` + `vpCards` / `longestRoad+largestArmy` 等都要在指纹里，否则像 PLAY_MONOPOLY（无人有该资源）、PLAY_ROAD_BUILDING、空 bank 的 PLAY_YEAR_OF_PLENTY 会被误判为 `NO_STATE_CHANGE`。改 `Action` 含义或新增字段时，记得同步更新 `fingerprint()`。
@@ -162,6 +164,29 @@ AI_PROVIDER=mock  docker run --rm -e AI_PROVIDER=mock -v "$PWD":/app -w /app nod
 ```
 
 基线（2026-05-20）：rule 60/60 局，120 平均回合，0 错误；mock 60/60 局，317 平均回合（弱启发式所以更长），0 错误。任何对 `actionCatalog` / `actionChecker.fingerprint` 的改动都跑两遍这两个 provider。
+
+**LLM Provider 验证（不入 sim，避免烧 token）：**
+
+```bash
+# 单次 API 调用冒烟（伪造 view + 3 个 legalActions，验证 MiniMax 能返回合法 JSON）
+docker run --rm --env-file .env -v "$PWD":/app -w /app node:20-alpine \
+  sh -c "npm install --no-fund --no-audit --silent && npx tsx server/llmSmoke.ts"
+
+# 端到端冒烟（需 stack 在跑）：代 P0 走完首手 setup1，看 P1 (AI) 真实推理
+docker run --rm --network catan_default --env-file .env -e SMOKE_DRIVE=1 \
+  -v "$PWD":/app -w /app node:20-alpine \
+  sh -c "npm install --no-fund --no-audit --silent && npx tsx server/smoke.ts http://catan-server:3001"
+```
+
+性能基线（2026-05-20，MiniMax-M2.7 默认 thinking）：单次决策 ~15-25s（thinking 拉满）。100 回合全 AI 的一局约 25-40 分钟。**这是接 LLM 之后游戏节奏的基本面**——后续真要"快游戏"需要换成更轻的模型或关 thinking。
+
+## API Key 与 .env
+
+`AI_PROVIDER=llm` 需要 `MINIMAX_API_KEY`，从 `.env` 注入到 `catan-server` 容器（`docker-compose.yml` 配置了 `env_file: .env`，required: false 所以缺文件也能起）。
+
+- **新机器 setup**：`cp .env.example .env`，把 `MINIMAX_API_KEY` 填进去；`.env` 已在 `.gitignore`
+- **常用环境变量**：见 `.env.example`，含 `AI_PROVIDER` / `MINIMAX_API_HOST`（CN 用 `api.minimaxi.com`、国际 `api.minimax.io`）/ `LLM_MODEL` / `LLM_TIMEOUT_MS` / `LLM_TEMPERATURE`
+- **快速降级**：把 `.env` 里改成 `AI_PROVIDER=rule` 或干脆删 `MINIMAX_API_KEY`，stack 会自动用规则 AI（log 里会看到 warn）
 
 ## Art / 美术风格
 

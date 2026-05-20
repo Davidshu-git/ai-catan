@@ -5,9 +5,17 @@ services:
       dockerfile: server/Dockerfile
     image: catan-server:latest
     container_name: catan-server
+    # .env 不入库（含 MINIMAX_API_KEY 等 secret）；缺文件时下面的 environment 也能跑（自动回退到 rule）
+    env_file:
+      - path: .env
+        required: false
     environment:
       - PORT=3001
-      # AI_TICK_MS=460 (默认)；调慢便于观察 AI 思考流可设大一点
+      - AI_PROVIDER=${AI_PROVIDER:-llm}
+      # AI_TICK_MS=460  默认；调慢便于观察 AI 思考流可设大一点
+      # LLM_TIMEOUT_MS=30000  调 LLM 超时
+      # LLM_TEMPERATURE=0.4   棋类决策不需要太发散
+      # MINIMAX_API_HOST=api.minimaxi.com  国内端；国际版用 api.minimax.io
     restart: unless-stopped
 
   catan:

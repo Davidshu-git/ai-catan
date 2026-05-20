@@ -23,6 +23,7 @@ import { RESOURCES, type FullGame, type GameState, type ResMap } from '../shared
 import type { AiDecisionProvider, AiErrorEvent, AiThoughtEvent } from './llm/types';
 import { createRuleProvider } from './llm/ruleProvider';
 import { createMockProvider } from './llm/mockProvider';
+import { createLlmProvider } from './llm/llmProvider';
 import { decideAiStep } from './llm/controller';
 
 const PORT = Number(process.env.PORT ?? 3001);
@@ -30,7 +31,7 @@ const AI_TICK_MS = Number(process.env.AI_TICK_MS ?? 460); // 每步 AI 之间的
 const STALL_LIMIT = 8; // 状态指纹连续重复阈值
 const AI_EVENT_BUFFER = 60; // 每房间缓存最近 N 条 AI 事件，用于断线后补拉
 const DEFAULT_ROOM = 'default'; // MVP：单房间
-const AI_PROVIDER = (process.env.AI_PROVIDER ?? 'rule').toLowerCase(); // rule | mock | llm（llm 留给后续）
+const AI_PROVIDER = (process.env.AI_PROVIDER ?? 'llm').toLowerCase(); // rule | mock | llm
 
 interface AiEventLogEntry {
   kind: 'thought' | 'error';
@@ -110,10 +111,16 @@ function buildProvider(name: string, board: FullGame['board'], state: GameState)
       return createMockProvider();
     case 'rule':
       return createRuleProvider(board, state);
-    case 'llm':
-      // 占位：第 8 步接真实 LLM。暂时回退到规则，且日志提示。
-      console.warn('[catan-server] AI_PROVIDER=llm 尚未接入，本次回退到 rule');
-      return createRuleProvider(board, state);
+    case 'llm': {
+      const apiKey = process.env.MINIMAX_API_KEY;
+      if (!apiKey) {
+        console.warn(
+          '[catan-server] AI_PROVIDER=llm 但缺 MINIMAX_API_KEY，本次回退到 rule（请在 .env 里填上）',
+        );
+        return createRuleProvider(board, state);
+      }
+      return createLlmProvider({ apiKey });
+    }
     default:
       console.warn(`[catan-server] 未知 AI_PROVIDER="${name}"，回退到 rule`);
       return createRuleProvider(board, state);
