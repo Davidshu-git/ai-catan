@@ -69,9 +69,6 @@ export const TERRAIN_TILE_ASSETS: Record<Terrain, string> = {
 /** 棋盘海洋背景贴图（手绘哥特墨线海面） */
 export const SEA_ASSET = '/assets/sea.png';
 
-/** 棋盘外圈海岸线贴图（透明 PNG，匹配棋盘 viewBox） */
-export const COASTLINE_ASSET = '/assets/coastline.png';
-
 /** 强盗棋子贴图（透明 PNG） */
 export const ROBBER_ASSET = '/assets/robber-token.png';
 

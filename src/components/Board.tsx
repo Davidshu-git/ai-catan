@@ -5,13 +5,11 @@
 import type { Board as BoardT, GameState, Hex } from '../game/types';
 import { TERRAIN_COLOR, pips } from '../game/types';
 import {
-  COASTLINE_ASSET,
   INK,
   PAPER,
   PAPER_DARK,
   PORT_BADGE_ASSET,
   ROBBER_ASSET,
-  SEA_ASSET,
   TERRAIN_ART,
   TERRAIN_TILE_ASSETS,
 } from '../art/theme';
@@ -152,8 +150,6 @@ export function Board({ board, state, mode, onVertex, onEdge, onHex }: Props) {
   const p = state.current;
   const bcx = board.width / 2;
   const bcy = board.height / 2;
-  // 海岸线环：以棋盘中心为轴放大并旋转 30°，对齐六边形岛屿并包住外圈
-  const coastSize = Math.max(board.width, board.height) * 1.06;
 
   const vertexLegal = (v: number): boolean => {
     if (mode !== 'settlement' && mode !== 'city') return false;
@@ -205,26 +201,6 @@ export function Board({ board, state, mode, onVertex, onEdge, onHex }: Props) {
           </clipPath>
         ))}
       </defs>
-
-      {/* 海洋背景：手绘哥特墨线海面贴图；渐变作为加载失败/兜底底色 */}
-      <rect x={0} y={0} width={board.width} height={board.height} fill="url(#sea)" />
-      <image
-        href={SEA_ASSET}
-        x={0}
-        y={0}
-        width={board.width}
-        height={board.height}
-        preserveAspectRatio="xMidYMid slice"
-      />
-      <image
-        href={COASTLINE_ASSET}
-        x={bcx - coastSize / 2}
-        y={bcy - coastSize / 2}
-        width={coastSize}
-        height={coastSize}
-        preserveAspectRatio="xMidYMid meet"
-        transform={`rotate(30 ${bcx} ${bcy})`}
-      />
 
       {/* 地块 */}
       {board.hexes.map((h) => {

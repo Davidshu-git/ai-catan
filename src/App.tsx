@@ -204,16 +204,6 @@ export function App() {
       </div>
 
       <aside className="sidebar">
-        <h1>
-          卡坦岛 · Catan
-          <small>
-            第 {Math.max(state.turn, 0)} 回合
-            <button className="btn" style={{ marginLeft: 8, padding: '4px 10px' }} onClick={newGame}>
-              新游戏
-            </button>
-          </small>
-        </h1>
-
         <div className="sidebar-scroll">
           <Players game={game} />
           <Phase
@@ -256,33 +246,46 @@ function Players({ game }: { game: FullGame }) {
   return (
     <div className="card">
       <h2>玩家</h2>
-      {state.players.map((pl) => {
-        const vp = pl.id === HUMAN ? totalVP(state, pl.id) : publicVP(state, pl.id);
-        const lr = longestRoadLength(board, state, pl.id);
-        return (
-          <div
-            key={pl.id}
-            className={`player-row${state.current === pl.id ? ' active' : ''}`}
-            style={{ flexWrap: 'wrap' }}
-          >
-            <span className="player-dot" style={{ background: pl.color }} />
-            <span className="player-name">
-              {pl.name}
-              {pl.id === HUMAN ? '' : ''}
-            </span>
-            <span className="player-vp">
-              {vp}
-              <span style={{ color: 'var(--muted)', fontWeight: 400 }}> 分</span>
-            </span>
-            <div className="player-meta">
-              手牌 {handSize(pl)} · 发展卡 {pl.devCards.length + pl.newDevCards.length} · 路 {lr}
-              {state.longestRoad.player === pl.id && <span className="badge">最长路 +2</span>}
-              {state.largestArmy.player === pl.id && <span className="badge">最大军队 +2</span>}
-              {pl.knightsPlayed > 0 && <span className="badge">骑士 {pl.knightsPlayed}</span>}
+      <div className="players-grid">
+        {state.players.map((pl) => {
+          const vp = pl.id === HUMAN ? totalVP(state, pl.id) : publicVP(state, pl.id);
+          const lr = longestRoadLength(board, state, pl.id);
+          return (
+            <div
+              key={pl.id}
+              className={`player-row${state.current === pl.id ? ' active' : ''}`}
+            >
+              <div className="player-head">
+                <span className="player-dot" style={{ background: pl.color }} />
+                <span className="player-name">{pl.name}</span>
+                <span className="player-vp">
+                  {vp}
+                  <span>分</span>
+                </span>
+              </div>
+              <div className="player-stats">
+                <span>
+                  <b>{handSize(pl)}</b>
+                  手牌
+                </span>
+                <span>
+                  <b>{pl.devCards.length + pl.newDevCards.length}</b>
+                  卡
+                </span>
+                <span>
+                  <b>{lr}</b>
+                  路
+                </span>
+              </div>
+              <div className="player-badges">
+                {state.longestRoad.player === pl.id && <span className="badge">最长路</span>}
+                {state.largestArmy.player === pl.id && <span className="badge">最大军队</span>}
+                {pl.knightsPlayed > 0 && <span className="badge">骑士 {pl.knightsPlayed}</span>}
+              </div>
             </div>
-          </div>
-        );
-      })}
+          );
+        })}
+      </div>
     </div>
   );
 }
