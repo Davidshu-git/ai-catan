@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { io, type Socket } from 'socket.io-client';
 import { Board, type BoardMode } from './components/Board';
 import { robberCandidates, type Action } from '../shared/reducer';
+import type { AiErrorEvent, AiThoughtEvent } from '../shared/protocol';
 import {
   handSize,
   longestRoadLength,
@@ -132,12 +133,19 @@ function Stepper({
   );
 }
 
+type ThoughtLogItem =
+  | { kind: 'thought'; data: AiThoughtEvent }
+  | { kind: 'error'; data: AiErrorEvent };
+
+const THOUGHT_LOG_MAX = 80;
+
 export function App() {
   // 初始 null：等待服务端 sync_state；AI 驱动循环全部在服务端
   const [game, setGame] = useState<FullGame | null>(null);
   const [connected, setConnected] = useState(socket.connected);
   const [mode, setMode] = useState<BoardMode>(null);
   const [toast, setToast] = useState<string | null>(null);
+  const [thoughtLog, setThoughtLog] = useState<ThoughtLogItem[]>([]);
 
   const dispatch = useCallback((a: Action) => {
     socket.emit('dispatch', a);
@@ -152,15 +160,33 @@ export function App() {
     const onConnect = () => setConnected(true);
     const onDisconnect = () => setConnected(false);
     const onSync = (g: FullGame) => setGame(g);
+    const append = (item: ThoughtLogItem) =>
+      setThoughtLog((arr) => {
+        const next = [...arr, item];
+        return next.length > THOUGHT_LOG_MAX ? next.slice(-THOUGHT_LOG_MAX) : next;
+      });
+    const onThought = (ev: AiThoughtEvent) => append({ kind: 'thought', data: ev });
+    const onError = (ev: AiErrorEvent) => append({ kind: 'error', data: ev });
     socket.on('connect', onConnect);
     socket.on('disconnect', onDisconnect);
     socket.on('sync_state', onSync);
+    socket.on('ai_thought', onThought);
+    socket.on('ai_error', onError);
     return () => {
       socket.off('connect', onConnect);
       socket.off('disconnect', onDisconnect);
       socket.off('sync_state', onSync);
+      socket.off('ai_thought', onThought);
+      socket.off('ai_error', onError);
     };
   }, []);
+
+  // new_game 时本地也清掉历史思考日志（server 同步会再补当前 buffer）
+  useEffect(() => {
+    if (game && game.state.turn === 0 && game.state.phase === 'setup1' && game.state.setupIndex === 0) {
+      setThoughtLog([]);
+    }
+  }, [game?.state.turn, game?.state.phase, game?.state.setupIndex]);
 
   // ⚠️ 所有 hook 必须在 early return 之前调用（Rules of Hooks）
   const state = game?.state;
@@ -239,6 +265,7 @@ export function App() {
             dispatch={dispatch}
             flash={flash}
           />
+          <ThoughtLog items={thoughtLog} players={state.players} />
           <Log state={state} />
         </div>
       </aside>
@@ -838,6 +865,63 @@ function PendingTrade({ game, dispatch }: { game: FullGame; dispatch: (a: Action
           拒绝
         </button>
       </div>
+    </div>
+  );
+}
+
+// ---------- AI 思考流 ----------
+
+function ThoughtLog({
+  items,
+  players,
+}: {
+  items: ThoughtLogItem[];
+  players: FullGame['state']['players'];
+}) {
+  const reversed = [...items].slice(-50).reverse();
+  return (
+    <div className="card">
+      <h2>AI 思考流</h2>
+      {reversed.length === 0 ? (
+        <p className="cost">等待 AI 行动…</p>
+      ) : (
+        <div className="thought-log">
+          {reversed.map((it, i) => {
+            const p = players[it.data.player];
+            if (it.kind === 'thought') {
+              const t = it.data;
+              return (
+                <div key={`${t.ts}-${i}`} className={`thought-row${t.status === 'fallback' ? ' is-fallback' : ''}`}>
+                  <div className="thought-head">
+                    <span className="player-dot" style={{ background: p?.color }} />
+                    <span className="thought-who">{p?.name ?? `玩家${t.player}`}</span>
+                    <span className="thought-tag">{t.phase}</span>
+                    <span className="thought-tag thought-tag-prov">{t.provider}</span>
+                    {t.retries > 0 && (
+                      <span className="thought-tag thought-tag-warn">重试 ×{t.retries}</span>
+                    )}
+                  </div>
+                  <div className="thought-text">{t.thought}</div>
+                  <div className="thought-action">→ {t.actionSummary}</div>
+                </div>
+              );
+            }
+            const e = it.data;
+            return (
+              <div key={`${e.ts}-${i}`} className="thought-row is-error">
+                <div className="thought-head">
+                  <span className="player-dot" style={{ background: p?.color }} />
+                  <span className="thought-who">{p?.name ?? `玩家${e.player}`}</span>
+                  <span className="thought-tag">{e.phase}</span>
+                  <span className="thought-tag thought-tag-prov">{e.provider}</span>
+                  <span className="thought-tag thought-tag-err">错误</span>
+                </div>
+                <div className="thought-text">{e.message}</div>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }

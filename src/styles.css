@@ -327,6 +327,88 @@ select {
 
 .log .turn-mark { color: var(--accent-d); font-weight: 800; margin-top: 6px; }
 
+/* ---- AI 思考流面板 ---- */
+.thought-log {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  max-height: 280px;
+  overflow-y: auto;
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+
+.thought-row {
+  border-left: 3px solid var(--line);
+  background: rgba(216, 199, 158, 0.5);
+  padding: 6px 9px;
+  border-radius: 0 5px 5px 0;
+}
+
+.thought-row.is-fallback {
+  border-left-color: var(--warn);
+  background: rgba(181, 150, 69, 0.18);
+}
+
+.thought-row.is-error {
+  border-left-color: var(--bad);
+  background: rgba(143, 46, 41, 0.14);
+}
+
+.thought-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+  margin-bottom: 4px;
+}
+
+.thought-who {
+  font-weight: 800;
+  color: var(--ink);
+  font-size: 12.5px;
+}
+
+.thought-tag {
+  background: var(--cream);
+  border: 1px solid var(--line-soft);
+  border-radius: 3px;
+  padding: 0px 5px;
+  font-size: 10.5px;
+  font-weight: 700;
+  color: #66513e;
+  letter-spacing: 0.3px;
+}
+
+.thought-tag-prov {
+  color: var(--accent-d);
+  border-color: var(--accent-d);
+}
+
+.thought-tag-warn {
+  color: #6d5817;
+  border-color: var(--warn);
+  background: rgba(181, 150, 69, 0.25);
+}
+
+.thought-tag-err {
+  color: var(--bad);
+  border-color: var(--bad);
+  background: rgba(143, 46, 41, 0.16);
+}
+
+.thought-text {
+  color: var(--ink);
+  font-weight: 600;
+  white-space: pre-wrap;
+}
+
+.thought-action {
+  margin-top: 3px;
+  color: #66513e;
+  font-weight: 700;
+}
+
 .hint {
   background: #d7d0ad;
   border: 2px solid var(--line);

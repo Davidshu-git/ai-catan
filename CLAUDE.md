@@ -45,10 +45,19 @@ shared/                ← 纯函数游戏内核：前后端共用，不依赖 D
   rules.ts             无副作用判定与计分（canBuild* / tradeRatio / publicVP / totalVP 等）
   reducer.ts           reduce(board, state, action) — 唯一可变入口（structuredClone 复制）
   ai.ts                aiNextAction（轮到该玩家时的下一动作） + aiAcceptsTrade（接受人类报价?）
+  protocol.ts          socket 事件 DTO：AiThoughtEvent / AiErrorEvent（前后端共用的"过线"类型）
 
 server/                ← Node + socket.io 后端，持有上帝视角状态、驱动 AI、广播变更
-  index.ts             socket.io 服务 + sessions Map（MVP 单房间，铺多房间路）
-  smoke.ts             端到端冒烟脚本：连接→收 sync_state→new_game→再收 sync_state
+  index.ts             socket.io 服务 + sessions Map（MVP 单房间）；scheduleAI 走 LLM controller
+  smoke.ts             端到端冒烟脚本：连接→收 sync_state/ai_thought
+  llm/                 LLM 决策层（Provider 抽象 + Maker-Checker）
+    types.ts           AiDecisionProvider 接口、LegalAction、LlmDecisionInput/Output
+    actionCatalog.ts   按 phase + current 枚举合法动作（不含 OFFER_TRADE、不含 discard）
+    stateTranslator.ts board+state → 当前玩家视角的精简 JSON（裁掉他人隐藏信息）
+    actionChecker.ts   三层校验：JSON schema → 白名单 actionId → dry-run reducer 状态指纹
+    ruleProvider.ts    包 aiNextAction → 反查 actionId；同时充当 LLM 失败的兜底 Provider
+    mockProvider.ts    按优先级（建城 > 房屋 > 路 > 买卡 > 银行兑换 > 发展卡 > END_TURN）选 actionId
+    controller.ts      decideAiStep：编排 catalog → view → provider → check → apply，含重试 + fallback
   Dockerfile           生产镜像（node:20-alpine + tsx 直跑 TS）
   tsconfig.json        独立 TS 配置（include shared/ + server/）
 
@@ -97,7 +106,15 @@ docker-compose.yml     ← 两个服务：catan-server（后端）+ catan（前�
 
 **Phase 驱动一切。** `Phase` 类型（setup1/setup2/roll/discard/moveRobber/steal/main/gameOver）同时驱动 `aiNextAction` 和前端 UI 的分支。Setup 是子状态机：`setupOrder`（蛇形顺序）+ `setupIndex` + `setupStep`（settlement→road）。
 
-**AI 驱动循环现在在 `server/index.ts` 的 `scheduleAI()` 里，不再在前端。** 每次 dispatch 后调用；若 `aiNextAction` 返回非 null 则延迟 `AI_TICK_MS`（默认 460ms）apply + 递归 schedule；返回 null 表示轮到人类、自然停；gameOver 也自然停。**含状态指纹防卡死兜底**：连续 8 次同指纹则强制 `END_TURN`（sim.ts 用同样指纹、阈值 600）。**改 AI 的铁律：`aiMain` 必须始终推进或最终 `END_TURN`，绝不能持续返回一个会被 reducer no-op 的动作，否则进入兜底前会刷屏。**
+**AI 驱动循环在 `server/index.ts` 的 `scheduleAI()` → `decideAiStep()`（在 `server/llm/controller.ts`）。** 每次 dispatch 后调用；流程：①生成 legalActions（actionCatalog）+ playerView（stateTranslator）→ ②喂给 `AiDecisionProvider`（由 `AI_PROVIDER` 环境变量切换 rule/mock/llm）→ ③用 `actionChecker` 三层校验 → ④校验过则 apply 新状态 + 广播 `ai_thought`；不过则带反馈重试最多 2 次 → ⑤仍不过 fallback 到 ruleProvider；最终极端兜底强制 `END_TURN`。**discard 阶段不喂 Provider**：组合爆炸，直接走规则 AI 兜底。**含状态指纹防卡死兜底**：连续 8 次同指纹则强制 `END_TURN`（sim.ts 用同样指纹、阈值 600）。**改 AI 的铁律：`aiMain` 必须始终推进或最终 `END_TURN`，绝不能持续返回一个会被 reducer no-op 的动作。**
+
+**Provider 抽象（重要）：**
+- `rule` Provider：包 `aiNextAction`，把动作 deep-equal 反查到 `legalActions` 中的 actionId。
+- `mock` Provider：按优先级从 legalActions 里挑，不接 LLM 也能跑通整条链路；用于压测和无 API 调试。
+- `llm` Provider（占位）：第 8 步要接的真实大模型；当前回退到 rule，并打 warn。
+- LLM 不直接生成 `Action`，**永远是从 server 生成的 `legalActions` 里挑 `actionId`**。这是降低乱编坐标 / 破坏状态机风险的关键设计，新增 Provider 时不要绕过这条约束。
+
+**`actionChecker.ts` 指纹的设计要点**：必须捕获仅靠"资源总数 / 建筑数"看不出的小变化——`devPlayed` / `freeRoads` / 每玩家的 `devCards.length` + `knightsPlayed` + `vpCards` / `longestRoad+largestArmy` 等都要在指纹里，否则像 PLAY_MONOPOLY（无人有该资源）、PLAY_ROAD_BUILDING、空 bank 的 PLAY_YEAR_OF_PLENTY 会被误判为 `NO_STATE_CHANGE`。改 `Action` 含义或新增字段时，记得同步更新 `fingerprint()`。
 
 **资源守恒不变量。** bank + 所有玩家的每种资源恒为 19。`spend()` 把成本退回 bank；`produceResources` 有银行短缺规则（需求 > 库存且 >1 人需要时本次无人获得）。任何移动资源的新代码都必须维持该不变量，`sim.ts` 会校验。
 
@@ -125,8 +142,26 @@ docker-compose.yml     ← 两个服务：catan-server（后端）+ catan（前�
 | C → S | `dispatch` | `Action` | 玩家动作；server reduce + 广播 + scheduleAI |
 | C → S | `propose_human_trade` | `{target, give, receive}` + ack | 人→AI 报价。ack 收 `{accepted: boolean}` |
 | C → S | `new_game` | —— | 清掉当前 session，重开一局，广播 |
+| S → C | `ai_thought` | `AiThoughtEvent` | 一次 AI 决策的思考流（player/phase/thought/actionId/provider/retries/status） |
+| S → C | `ai_error` | `AiErrorEvent` | Provider 输出非法 / 调用失败时广播；重试过程的错误也会发 |
+
+`ai_thought` / `ai_error` 的 DTO 定义在 `shared/protocol.ts`，server 端有最近 60 条环形 buffer：新连接的客户端会在 `sync_state` 之后立即补拉历史事件。
 
 新增事件时同步更新此表与 `server/index.ts` 的注释。
+
+## 验证命令
+
+```bash
+# 双 typecheck —— 容器内
+docker run --rm -v "$PWD":/app -w /app node:20-alpine \
+  sh -c "npm install --no-fund --no-audit --silent && npm run typecheck && npm run typecheck:server"
+
+# sim 压测：默认 rule，可切到 mock 跑全 LLM 链路（catalog + checker 全开）
+AI_PROVIDER=rule  docker run --rm -e AI_PROVIDER=rule -v "$PWD":/app -w /app node:20-alpine npx --yes tsx sim.ts
+AI_PROVIDER=mock  docker run --rm -e AI_PROVIDER=mock -v "$PWD":/app -w /app node:20-alpine npx --yes tsx sim.ts
+```
+
+基线（2026-05-20）：rule 60/60 局，120 平均回合，0 错误；mock 60/60 局，317 平均回合（弱启发式所以更长），0 错误。任何对 `actionCatalog` / `actionChecker.fingerprint` 的改动都跑两遍这两个 provider。
 
 ## Art / 美术风格
 
