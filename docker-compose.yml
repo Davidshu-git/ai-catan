@@ -1,4 +1,15 @@
 services:
+  catan-server:
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+    image: catan-server:latest
+    container_name: catan-server
+    environment:
+      - PORT=3001
+      # AI_TICK_MS=460 (默认)；调慢便于观察 AI 思考流可设大一点
+    restart: unless-stopped
+
   catan:
     build:
       context: .
@@ -7,4 +18,6 @@ services:
     container_name: catan
     ports:
       - "8088:80"
+    depends_on:
+      - catan-server
     restart: unless-stopped

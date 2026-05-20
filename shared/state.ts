@@ -3,9 +3,12 @@
 // ============================================================
 
 import { generateBoard } from './board';
-import { PLAYER_ART_COLORS } from '../art/theme';
 import type { DevCard, FullGame, GameState, Player } from './types';
 import { emptyRes } from './types';
+
+// 玩家配色：这是游戏状态的一部分（每个 Player 自带 color 字段），
+// 因此放在 shared 层；前端 art/theme.ts 直接从这里 re-export，避免双写。
+export const PLAYER_ART_COLORS = ['#a83836', '#3e668f', '#526b3b', '#a06a32'];
 
 const PLAYER_DEFS = [
   { name: '你', color: PLAYER_ART_COLORS[0], isAI: false },

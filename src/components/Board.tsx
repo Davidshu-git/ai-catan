@@ -2,8 +2,8 @@
 // SVG 棋盘渲染与交互（手绘哥特纸片风）
 // ============================================================
 
-import type { Board as BoardT, GameState, Hex } from '../game/types';
-import { TERRAIN_COLOR, pips } from '../game/types';
+import type { Board as BoardT, GameState, Hex } from '../../shared/types';
+import { TERRAIN_COLOR, pips } from '../../shared/types';
 import {
   INK,
   PAPER,
@@ -19,7 +19,7 @@ import {
   canBuildSettlement,
   canPlaceRoadSetup,
   canPlaceSettlementFree,
-} from '../game/rules';
+} from '../../shared/rules';
 
 export type BoardMode = 'road' | 'settlement' | 'city' | 'robber' | null;
 

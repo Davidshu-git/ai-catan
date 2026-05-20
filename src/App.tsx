@@ -1,15 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { io, type Socket } from 'socket.io-client';
 import { Board, type BoardMode } from './components/Board';
-import { createGame } from './game/state';
-import { reduce, robberCandidates, type Action } from './game/reducer';
-import { aiAcceptsTrade, aiNextAction } from './game/ai';
+import { robberCandidates, type Action } from '../shared/reducer';
 import {
   handSize,
   longestRoadLength,
   publicVP,
   totalVP,
   tradeRatio,
-} from './game/rules';
+} from '../shared/rules';
 import {
   COSTS,
   DEV_LABEL,
@@ -21,9 +20,38 @@ import {
   type FullGame,
   type Resource,
   type ResMap,
-} from './game/types';
+} from '../shared/types';
 
 const HUMAN = 0;
+
+// 服务端地址：构建时由 Vite 注入 VITE_SERVER_URL；为空字符串则同源（生产 nginx 反代场景）
+const SERVER_URL = import.meta.env.VITE_SERVER_URL ?? '';
+
+// 模块级单例：避免 React StrictMode 双重 mount 时重复建连
+const socket: Socket = io(SERVER_URL, {
+  path: '/socket.io/',
+  transports: ['websocket', 'polling'],
+});
+
+// 人→AI 交易：服务端跑 aiAcceptsTrade，通过 ack 回调返回是否接受
+function proposeHumanTrade(
+  target: number,
+  give: ResMap,
+  receive: ResMap,
+): Promise<boolean> {
+  return new Promise((resolve) => {
+    socket
+      .timeout(2000)
+      .emit(
+        'propose_human_trade',
+        { target, give, receive },
+        (err: Error | null, res?: { accepted: boolean }) => {
+          if (err || !res) resolve(false);
+          else resolve(res.accepted);
+        },
+      );
+  });
+}
 
 function costText(c: Partial<ResMap>): string {
   return RESOURCES.filter((r) => (c[r] ?? 0) > 0)
@@ -105,14 +133,14 @@ function Stepper({
 }
 
 export function App() {
-  const [game, setGame] = useState<FullGame>(() => createGame());
+  // 初始 null：等待服务端 sync_state；AI 驱动循环全部在服务端
+  const [game, setGame] = useState<FullGame | null>(null);
+  const [connected, setConnected] = useState(socket.connected);
   const [mode, setMode] = useState<BoardMode>(null);
   const [toast, setToast] = useState<string | null>(null);
 
-  const { board, state } = game;
-
   const dispatch = useCallback((a: Action) => {
-    setGame((g) => ({ board: g.board, state: reduce(g.board, g.state, a) }));
+    socket.emit('dispatch', a);
   }, []);
 
   const flash = useCallback((m: string) => {
@@ -120,46 +148,44 @@ export function App() {
     setTimeout(() => setToast(null), 2200);
   }, []);
 
-  // AI 驱动循环（带无进展兜底，防止 AI 空转冻结）
-  const stall = useRef({ sig: '', count: 0 });
   useEffect(() => {
-    if (state.phase === 'gameOver') return;
-    const next = aiNextAction(board, state);
-    if (!next) {
-      stall.current = { sig: '', count: 0 };
-      return;
-    }
-    const sig = `${state.turn}|${state.phase}|${state.current}|${
-      Object.keys(state.buildings).length
-    }|${Object.keys(state.roads).length}|${state.players
-      .map((p) => p.resources.wood + p.resources.brick + p.resources.sheep + p.resources.wheat + p.resources.ore)
-      .join(',')}|${state.devDeck.length}`;
-    if (sig === stall.current.sig) stall.current.count++;
-    else stall.current = { sig, count: 0 };
+    const onConnect = () => setConnected(true);
+    const onDisconnect = () => setConnected(false);
+    const onSync = (g: FullGame) => setGame(g);
+    socket.on('connect', onConnect);
+    socket.on('disconnect', onDisconnect);
+    socket.on('sync_state', onSync);
+    return () => {
+      socket.off('connect', onConnect);
+      socket.off('disconnect', onDisconnect);
+      socket.off('sync_state', onSync);
+    };
+  }, []);
 
-    // 同一局面连续多次无进展：强制结束当前回合，避免界面冻结
-    if (stall.current.count >= 8) {
-      stall.current = { sig: '', count: 0 };
-      if (state.phase === 'main') {
-        const t = setTimeout(() => dispatch({ type: 'END_TURN' }), 200);
-        return () => clearTimeout(t);
-      }
-      return;
-    }
-    const t = setTimeout(() => dispatch(next), 460);
-    return () => clearTimeout(t);
-  }, [game, board, state, dispatch]);
-
-  const isHumanTurn = state.current === HUMAN;
-  const isSetup = state.phase === 'setup1' || state.phase === 'setup2';
-
+  // ⚠️ 所有 hook 必须在 early return 之前调用（Rules of Hooks）
+  const state = game?.state;
+  const isHumanTurn = state?.current === HUMAN;
+  const isSetup = state?.phase === 'setup1' || state?.phase === 'setup2';
   const boardMode: BoardMode = useMemo(() => {
+    if (!state) return null;
     if (state.phase === 'gameOver') return null;
     if (isSetup && isHumanTurn) return state.setupStep === 'settlement' ? 'settlement' : 'road';
     if (state.phase === 'moveRobber' && isHumanTurn) return 'robber';
     if (state.phase === 'main' && isHumanTurn) return mode;
     return null;
-  }, [state.phase, state.setupStep, isSetup, isHumanTurn, mode]);
+  }, [state, isSetup, isHumanTurn, mode]);
+
+  if (!game || !state) {
+    return (
+      <div className="app">
+        <div className="hint" style={{ margin: 'auto', padding: 24 }}>
+          {connected ? '正在加载棋盘…' : '正在连接服务器…'}
+        </div>
+      </div>
+    );
+  }
+
+  const { board } = game;
 
   // 棋盘点击
   const onVertex = (v: number) => {
@@ -184,7 +210,7 @@ export function App() {
   };
 
   const newGame = () => {
-    setGame(createGame());
+    socket.emit('new_game');
     setMode(null);
   };
 
@@ -498,7 +524,7 @@ function MainActions({
 
       <BankTrade game={game} dispatch={dispatch} />
 
-      <PlayerTrade game={game} dispatch={dispatch} flash={flash} />
+      <PlayerTrade game={game} flash={flash} />
 
       <button className="btn warn" onClick={() => dispatch({ type: 'END_TURN' })}>
         结束回合
@@ -658,11 +684,9 @@ function BankTrade({ game, dispatch }: { game: FullGame; dispatch: (a: Action) =
 
 function PlayerTrade({
   game,
-  dispatch,
   flash,
 }: {
   game: FullGame;
-  dispatch: (a: Action) => void;
   flash: (m: string) => void;
 }) {
   const { state } = game;
@@ -670,17 +694,19 @@ function PlayerTrade({
   const [give, setGive] = useState<ResMap>(emptyRes());
   const [recv, setRecv] = useState<ResMap>(emptyRes());
   const [target, setTarget] = useState<number>(1);
+  const [pending, setPending] = useState(false);
 
-  const propose = () => {
-    const accepted = aiAcceptsTrade(state, target, give, recv);
+  const propose = async () => {
     const gN = RESOURCES.reduce((t, r) => t + give[r], 0);
     const rN = RESOURCES.reduce((t, r) => t + recv[r], 0);
     if (gN === 0 && rN === 0) {
       flash('请先设置交易内容');
       return;
     }
+    setPending(true);
+    const accepted = await proposeHumanTrade(target, give, recv);
+    setPending(false);
     if (accepted) {
-      dispatch({ type: 'TRADE_EXECUTE', from: HUMAN, to: target, give, receive: recv });
       flash(`${state.players[target].name} 接受了交易`);
       setGive(emptyRes());
       setRecv(emptyRes());
@@ -734,8 +760,13 @@ function PlayerTrade({
           </div>
         ))}
       </div>
-      <button className="btn" style={{ marginTop: 10, width: '100%' }} onClick={propose}>
-        提议交易
+      <button
+        className="btn"
+        style={{ marginTop: 10, width: '100%' }}
+        onClick={propose}
+        disabled={pending}
+      >
+        {pending ? '等待对方应答…' : '提议交易'}
       </button>
     </div>
   );

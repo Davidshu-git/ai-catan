@@ -1,4 +1,4 @@
-import type { Resource, Terrain } from '../game/types';
+import type { Resource, Terrain } from '../../shared/types';
 
 export interface TerrainArt {
   base: string;
@@ -83,4 +83,4 @@ export const RESOURCE_ART: Record<Resource, string> = {
   ore: TERRAIN_ART.ore.base,
 };
 
-export const PLAYER_ART_COLORS = ['#a83836', '#3e668f', '#526b3b', '#a06a32'];
+export { PLAYER_ART_COLORS } from '../../shared/state';

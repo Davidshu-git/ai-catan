@@ -1,11 +1,11 @@
 // 无头自动对局压测：4 个 AI 互相对战，逐步校验不变量，用于发现 bug
 // 运行：docker run --rm -v "$PWD":/app -w /app node:20-alpine npx --yes tsx sim.ts
 
-import { createGame } from './src/game/state';
-import { reduce } from './src/game/reducer';
-import { aiNextAction } from './src/game/ai';
-import { totalVP } from './src/game/rules';
-import { RESOURCES } from './src/game/types';
+import { createGame } from './shared/state';
+import { reduce } from './shared/reducer';
+import { aiNextAction } from './shared/ai';
+import { totalVP } from './shared/rules';
+import { RESOURCES } from './shared/types';
 
 const GAMES = 60;
 const MAX_STEPS = 20000;
