@@ -381,7 +381,7 @@ function AiControls({
       <div className="btn-grid">
         <button
           className={`btn${control.autoplay ? '' : ' primary'}`}
-          disabled={!connected || waiting}
+          disabled={!connected}
           onClick={() => onAutoplay(!control.autoplay)}
         >
           {control.autoplay ? '暂停' : '自动推进'}
