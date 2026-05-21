@@ -12,9 +12,9 @@ export const PLAYER_ART_COLORS = ['#a83836', '#3e668f', '#526b3b', '#a06a32'];
 
 const PLAYER_DEFS = [
   { name: '你', color: PLAYER_ART_COLORS[0], isAI: false },
-  { name: 'AI · 蓝', color: PLAYER_ART_COLORS[1], isAI: true },
-  { name: 'AI · 绿', color: PLAYER_ART_COLORS[2], isAI: true },
-  { name: 'AI · 橙', color: PLAYER_ART_COLORS[3], isAI: true },
+  { name: '蓝', color: PLAYER_ART_COLORS[1], isAI: true },
+  { name: '绿', color: PLAYER_ART_COLORS[2], isAI: true },
+  { name: '橙', color: PLAYER_ART_COLORS[3], isAI: true },
 ];
 
 function shuffle<T>(arr: T[]): T[] {

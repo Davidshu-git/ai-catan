@@ -116,6 +116,8 @@ export interface AiControlState {
    */
   hintEnabled: boolean;
   provider: string;
+  /** 各 AI 席位当前的 provider；前端按玩家展示开关时使用 */
+  agentProviders: Record<number, string>;
   currentAgent?: {
     player: number;
     name: string;

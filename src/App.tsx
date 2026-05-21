@@ -183,6 +183,7 @@ const DEFAULT_AI_CONTROL: AiControlState = {
   canStep: false,
   hintEnabled: true,
   provider: 'unknown',
+  agentProviders: {},
 };
 
 const EMPTY_AI_STEP_TIMER: AiStepTimer = {
@@ -201,14 +202,6 @@ const SIDEBAR_STORAGE_KEY = 'catan-sidebar-width';
 
 function nowMs(): number {
   return typeof performance === 'undefined' ? Date.now() : performance.now();
-}
-
-function formatDuration(ms: number): string {
-  if (ms < 1000) return `${Math.max(0, Math.round(ms))}ms`;
-  if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`;
-  const minutes = Math.floor(ms / 60000);
-  const seconds = Math.floor((ms % 60000) / 1000);
-  return `${minutes}m ${seconds}s`;
 }
 
 function readStoredSidebarWidth(): number {
@@ -288,6 +281,10 @@ export function App() {
 
   const setAiHint = useCallback((hint: boolean) => {
     socket.emit('set_ai_hint', { hint });
+  }, []);
+
+  const setAiProvider = useCallback((playerId: number, useLlm: boolean) => {
+    socket.emit('set_ai_provider', { player: playerId, provider: useLlm ? 'llm' : 'rule' });
   }, []);
 
   const finishAiStepTimer = useCallback((ok: boolean) => {
@@ -551,7 +548,19 @@ export function App() {
 
       <aside className="sidebar">
         <div className="sidebar-scroll">
-          <Players game={game} />
+          <Players
+            game={game}
+            processingMs={
+              aiStepTimer.running
+                ? aiStepTimer.elapsedMs
+                : aiAutoTimer.running
+                  ? aiAutoTimer.elapsedMs
+                  : null
+            }
+            agentProviders={aiControl.agentProviders}
+            connected={connected}
+            onToggleProvider={setAiProvider}
+          />
           <Phase
             game={game}
             mode={mode}
@@ -572,7 +581,6 @@ export function App() {
             control={aiControl}
             connected={connected}
             stepTimer={aiStepTimer}
-            autoTimer={aiAutoTimer}
             onAutoplay={setAiAutoplay}
             onStep={stepAi}
             onToggleHint={setAiHint}
@@ -608,7 +616,6 @@ function AiControls({
   control,
   connected,
   stepTimer,
-  autoTimer,
   onAutoplay,
   onStep,
   onToggleHint,
@@ -616,73 +623,35 @@ function AiControls({
   control: AiControlState;
   connected: boolean;
   stepTimer: AiStepTimer;
-  autoTimer: AiStepTimer;
   onAutoplay: (autoplay: boolean) => void;
   onStep: () => void;
   onToggleHint: (hint: boolean) => void;
 }) {
   const waiting = control.queued || control.busy;
   const stepDisabled = stepTimer.running || !connected || control.autoplay || waiting || !control.canStep;
-  const status = control.busy
-    ? '思考中'
-    : control.queued
-      ? '已排队'
-      : control.canStep
-        ? '可推进'
-        : '等待玩家';
 
   return (
     <div className="card card-plain">
-      <div className="ai-control-head">
-        <span className={`tag${control.autoplay ? ' tag-on' : ''}`}>
-          {control.autoplay ? '自动' : '手动'}
-        </span>
-        <span className="tag">{status}</span>
-        <span className="tag">{control.provider}</span>
+      <div className="btn-grid btn-grid-3">
         <button
           type="button"
-          className={`tag tag-btn${control.hintEnabled ? ' tag-on' : ''}`}
+          className={`btn${control.hintEnabled ? '' : ' primary'}`}
           disabled={!connected}
           onClick={() => onToggleHint(!control.hintEnabled)}
           title="切换是否在 LLM prompt 里塞空间动作 hint；A/B 实验用，仅影响后续决策"
         >
-          hint {control.hintEnabled ? 'ON' : 'OFF'}
+          hint
         </button>
-        {control.currentAgent && (
-          <span className="tag">
-            {control.currentAgent.name} · 记忆 {control.currentAgent.memorySize}
-          </span>
-        )}
-      </div>
-      <div className="btn-grid">
         <button
           className={`btn${control.autoplay ? '' : ' primary'}`}
           disabled={!connected}
           onClick={() => onAutoplay(!control.autoplay)}
         >
-          {control.autoplay ? '暂停' : '自动推进'}
+          {control.autoplay ? '暂停' : '自动'}
         </button>
         <button className="btn" disabled={stepDisabled} onClick={onStep}>
-          {stepTimer.running ? `推进中 ${formatDuration(stepTimer.elapsedMs)}` : '推进一步'}
+          单步
         </button>
-      </div>
-      <div className="ai-step-meters" aria-live="polite">
-        <div className={`ai-step-meter${stepTimer.running ? ' is-active' : ''}`}>
-          {stepTimer.running
-            ? `手动 · 本次 ${formatDuration(stepTimer.elapsedMs)}`
-            : stepTimer.lastMs == null
-              ? '手动 · 上一步 --'
-              : `手动 · ${stepTimer.lastOk === false ? '上次失败' : '上一步'} ${formatDuration(stepTimer.lastMs)}`}
-        </div>
-        {(control.autoplay || autoTimer.running || autoTimer.lastMs != null) && (
-          <div className={`ai-step-meter${autoTimer.running ? ' is-active' : ''}`}>
-            {autoTimer.running
-              ? `自动 · 本次 ${formatDuration(autoTimer.elapsedMs)}`
-              : autoTimer.lastMs == null
-                ? '自动 · 上一步 --'
-                : `自动 · ${autoTimer.lastOk === false ? '上次中断' : '上一步'} ${formatDuration(autoTimer.lastMs)}`}
-          </div>
-        )}
       </div>
     </div>
   );
@@ -690,7 +659,19 @@ function AiControls({
 
 // ---------- 玩家面板 ----------
 
-function Players({ game }: { game: FullGame }) {
+function Players({
+  game,
+  processingMs,
+  agentProviders,
+  connected,
+  onToggleProvider,
+}: {
+  game: FullGame;
+  processingMs: number | null;
+  agentProviders: Record<number, string>;
+  connected: boolean;
+  onToggleProvider: (playerId: number, useLlm: boolean) => void;
+}) {
   const { board, state } = game;
   const prevResourcesRef = useRef<Record<number, ResMap>>(
     Object.fromEntries(state.players.map((p) => [p.id, { ...p.resources }])) as Record<
@@ -728,6 +709,20 @@ function Players({ game }: { game: FullGame }) {
               <div className="player-head">
                 <span className="player-dot" style={{ background: pl.color }} />
                 <span className="player-name">{pl.name}</span>
+                {pl.isAI && (() => {
+                  const useLlm = (agentProviders[pl.id] ?? '').startsWith('llm');
+                  return (
+                    <button
+                      type="button"
+                      className={`player-ai-toggle${useLlm ? ' is-on' : ''}`}
+                      disabled={!connected}
+                      onClick={() => onToggleProvider(pl.id, !useLlm)}
+                      title={useLlm ? '当前走大模型，点击切到规则' : '当前走规则，点击切到大模型'}
+                    >
+                      AI
+                    </button>
+                  );
+                })()}
               </div>
               <div className="player-stats">
                 <span className="player-stat-vp">
@@ -736,7 +731,7 @@ function Players({ game }: { game: FullGame }) {
                 </span>
                 <span>
                   <b>{handSize(pl)}</b>
-                  手牌
+                  牌
                 </span>
                 <span>
                   <b>{pl.devCards.length + pl.newDevCards.length}</b>
@@ -746,11 +741,10 @@ function Players({ game }: { game: FullGame }) {
                   <b>{lr}</b>
                   路
                 </span>
-              </div>
-              <div className="player-badges">
-                {state.longestRoad.player === pl.id && <span className="badge">最长路</span>}
-                {state.largestArmy.player === pl.id && <span className="badge">最大军队</span>}
-                {pl.knightsPlayed > 0 && <span className="badge">骑士 {pl.knightsPlayed}</span>}
+                <span>
+                  <b>{pl.knightsPlayed}</b>
+                  骑
+                </span>
               </div>
               <div className="player-resources">
                 {RESOURCES.map((r) => (
@@ -763,6 +757,13 @@ function Players({ game }: { game: FullGame }) {
                     <b>{pl.resources[r]}</b>
                   </span>
                 ))}
+              </div>
+              <div className="player-badges">
+                {state.current === pl.id && processingMs != null && (
+                  <span className="player-time">
+                    {(processingMs / 1000).toFixed(1)}秒
+                  </span>
+                )}
               </div>
             </div>
           );

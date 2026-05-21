@@ -61,6 +61,8 @@ interface Session {
   aiHint: boolean;
   /** LLM 调用期间置 true，避免同一房间并发跑多个 AI 决策 */
   aiBusy: boolean;
+  /** 会话级 AI provider（llm / rule / mock）；前端可通过 set_ai_provider 切换，new_game 也保留 */
+  aiProvider: string;
   /** 每个 AI 席位独立 agent runtime（身份 / 性格 / 记忆 / provider） */
   agents: Record<number, AiAgentRuntime>;
   /** 环形 buffer：最近的 AI 决策事件，便于晚来的客户端补齐上下文 */
@@ -81,6 +83,7 @@ function getSession(roomId: string): Session {
       aiAutoplay: DEFAULT_AI_AUTOPLAY,
       aiHint: DEFAULT_AI_HINT,
       aiBusy: false,
+      aiProvider: AI_PROVIDER,
       agents: createAgentRuntimes(game.state, AI_PROVIDER),
       aiEvents: [],
     };
@@ -94,7 +97,7 @@ function createServerGame(): FullGame {
   if (PLAYER_MODE !== 'human0') {
     for (const p of game.state.players) {
       p.isAI = true;
-      if (p.id === 0) p.name = 'AI · 红';
+      if (p.id === 0) p.name = '红';
     }
     game.state.log = [{ text: '观察局开始：4 个独立 AI Agent 将按控制面板逐步行动。' }];
   }
@@ -139,13 +142,18 @@ function getDecisionAgent(session: Session, state = session.game.state): AiAgent
 
 function getAiControlState(session: Session): AiControlState {
   const currentAgent = getDecisionAgent(session);
+  const agentProviders: Record<number, string> = {};
+  for (const agent of Object.values(session.agents)) {
+    agentProviders[agent.playerId] = agent.providerName;
+  }
   return {
     autoplay: session.aiAutoplay,
     queued: session.aiTimer != null,
     busy: session.aiBusy,
     canStep: hasAiWork(session.game.state),
     hintEnabled: session.aiHint,
-    provider: currentAgent?.providerName ?? AI_PROVIDER,
+    provider: currentAgent?.providerName ?? session.aiProvider,
+    agentProviders,
     currentAgent: currentAgent
       ? {
           player: currentAgent.playerId,
@@ -292,7 +300,7 @@ function scheduleAI(
     const startVersion = session.version;
     const agent = getDecisionAgent(session, game.state);
     const provider = buildProvider(
-      agent?.providerName ?? AI_PROVIDER,
+      agent?.providerName ?? session.aiProvider,
       game.board,
       game.state,
       session.aiHint,
@@ -479,6 +487,35 @@ io.on('connection', (socket: Socket) => {
     },
   );
 
+  socket.on(
+    'set_ai_provider',
+    (
+      payload: { player?: number; provider: string },
+      ack?: (r: { ok: boolean }) => void,
+    ) => {
+      const s = getSession(DEFAULT_ROOM);
+      const next = String(payload.provider ?? '').toLowerCase() === 'llm' ? 'llm' : 'rule';
+      if (typeof payload.player === 'number') {
+        const agent = s.agents[payload.player];
+        if (!agent) {
+          ack?.({ ok: false });
+          return;
+        }
+        agent.providerName = next;
+        // 仅当被切换的是当前正在思考的玩家时，作废飞行中的 LLM 决策
+        if (s.aiBusy && s.game.state.current === payload.player) s.version++;
+      } else {
+        s.aiProvider = next;
+        for (const agent of Object.values(s.agents)) {
+          agent.providerName = next;
+        }
+        if (s.aiBusy) s.version++;
+      }
+      emitAiControl(io, DEFAULT_ROOM, s);
+      ack?.({ ok: true });
+    },
+  );
+
   socket.on('step_ai', (ack?: (r: { ok: boolean; reason?: string }) => void) => {
     const s = getSession(DEFAULT_ROOM);
     if (s.aiBusy || s.aiTimer) {
@@ -505,7 +542,7 @@ io.on('connection', (socket: Socket) => {
     s.game = createServerGame();
     s.version++;
     s.stall = { sig: '', count: 0 };
-    s.agents = createAgentRuntimes(s.game.state, AI_PROVIDER);
+    s.agents = createAgentRuntimes(s.game.state, s.aiProvider);
     s.aiEvents = [];
     broadcastState(io, DEFAULT_ROOM);
     emitAiControl(io, DEFAULT_ROOM, s);

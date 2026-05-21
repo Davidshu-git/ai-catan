@@ -260,7 +260,7 @@ body {
 
 .player-head {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   gap: 4px;
   width: 100%;
@@ -274,9 +274,19 @@ body {
   font-weight: 800;
 }
 
+.player-time {
+  margin-left: auto;
+  align-self: center;
+  font-size: 10px;
+  font-weight: 800;
+  color: var(--accent-d);
+  letter-spacing: 0;
+  line-height: 1;
+}
+
 .player-stats {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 3px;
   width: 100%;
 }
@@ -390,30 +400,8 @@ body {
 .btn.warn { background: var(--warn); border-color: #735a26; color: #2d2217; box-shadow: 3px 4px 0 #735a26; }
 
 .btn-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }
+.btn-grid.btn-grid-3 { grid-template-columns: repeat(3, 1fr); }
 .btn-grid .btn { width: 100%; }
-.ai-step-meters {
-  margin-top: 8px;
-  display: grid;
-  gap: 6px;
-}
-.ai-step-meter {
-  min-height: 20px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border: 1px dashed rgba(58, 44, 33, 0.42);
-  border-radius: 5px;
-  background: rgba(232, 215, 180, 0.38);
-  color: var(--muted);
-  font-size: 11px;
-  font-weight: 800;
-  line-height: 1;
-}
-.ai-step-meter.is-active {
-  background: rgba(181, 150, 69, 0.24);
-  border-color: rgba(115, 90, 38, 0.65);
-  color: var(--accent-d);
-}
 .btn-col { display: flex; flex-direction: column; gap: 9px; }
 .cost { font-size: 10px; color: var(--muted); font-weight: 800; display: block; margin-top: 3px; }
 
@@ -442,6 +430,35 @@ select {
   background: rgba(239, 227, 200, 0.82);
   box-shadow: 4px 5px 0 rgba(36, 29, 26, 0.22);
   pointer-events: none;
+}
+
+.player-ai-toggle {
+  font: inherit;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.4px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  border: 1px solid rgba(58, 44, 33, 0.5);
+  background: rgba(232, 215, 180, 0.55);
+  color: var(--muted);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.player-ai-toggle:hover:not(:disabled) {
+  background: rgba(232, 215, 180, 0.85);
+}
+
+.player-ai-toggle:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.player-ai-toggle.is-on {
+  background: var(--accent);
+  color: var(--cream);
+  border-color: var(--accent-d);
 }
 
 .dice-hud .die {
@@ -747,14 +764,6 @@ select {
 .stepper span { width: 18px; text-align: center; font-weight: 800; font-size: 14px; }
 
 .tag-row { display: flex; gap: 7px; flex-wrap: wrap; align-items: center; }
-
-.ai-control-head {
-  display: flex;
-  gap: 7px;
-  flex-wrap: wrap;
-  align-items: center;
-  margin-bottom: 9px;
-}
 
 .tag {
   font-size: 11.5px;

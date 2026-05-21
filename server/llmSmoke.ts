@@ -25,7 +25,7 @@ const view: PlayerView = {
   me: 1,
   self: {
     id: 1,
-    name: 'AI · 蓝',
+    name: '蓝',
     resources: { 木: 1, 砖: 1, 羊: 0, 麦: 2, 矿: 3 },
     handSize: 7,
     discardOnSeven: 0,
