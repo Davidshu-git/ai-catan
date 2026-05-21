@@ -9,12 +9,13 @@
 // ============================================================
 
 import type { Board, GameState, Resource, Terrain } from '../../shared/types';
-import { pips } from '../../shared/types';
+import { pips as yieldPoints } from '../../shared/types';
+import { canBuildRoad, canBuildSettlement } from '../../shared/rules';
 
 /** 资源/地形显示顺序，便于 LLM 比较时稳定 */
 const TERRAIN_ORDER: Terrain[] = ['麦', '矿', '木', '砖', '羊', '沙漠'];
 
-/** 把一个顶点周边的 hex 描述成 "麦8(5) 矿11(2) 木6(5)" 形式 */
+/** 把一个顶点周边的 hex 描述成 "麦8(5产出点) 矿11(2产出点) 木6(5产出点)" 形式 */
 function describeVertexTiles(b: Board, vertexId: number): string {
   const v = b.vertices[vertexId];
   if (!v) return '?';
@@ -24,19 +25,19 @@ function describeVertexTiles(b: Board, vertexId: number): string {
     .sort((a, b) => TERRAIN_ORDER.indexOf(a.terrain) - TERRAIN_ORDER.indexOf(b.terrain))
     .map((h) => {
       if (h.terrain === '沙漠' || h.number == null) return '沙漠';
-      return `${h.terrain}${h.number}(${pips(h.number)})`;
+      return `${h.terrain}${h.number}(${yieldPoints(h.number)}产出点)`;
     });
   return parts.length > 0 ? parts.join(' ') : '?';
 }
 
-/** 顶点资源点数总和（dice pips），用于 LLM 直观对比"产出潜力" */
-function vertexPipSum(b: Board, vertexId: number): number {
+/** 顶点产出点总和（骰点概率权重），用于 LLM 直观对比"产出潜力" */
+function vertexYieldPointSum(b: Board, vertexId: number): number {
   const v = b.vertices[vertexId];
   if (!v) return 0;
   let sum = 0;
   for (const hid of v.hexes) {
     const h = b.hexes[hid];
-    if (h && h.terrain !== '沙漠') sum += pips(h.number);
+    if (h && h.terrain !== '沙漠') sum += yieldPoints(h.number);
   }
   return sum;
 }
@@ -59,6 +60,49 @@ function portText(b: Board, vertexId: number): string {
   return v.port === '通用' ? ' 港口(通用3:1)' : ` 港口(${v.port}2:1)`;
 }
 
+function distanceRuleText(b: Board, s: GameState, vertexId: number): string {
+  const v = b.vertices[vertexId];
+  if (!v) return '';
+  const adjacentBuildings = v.neighbors.filter((n) => !!s.buildings[n]);
+  if (adjacentBuildings.length === 0) {
+    return '；距离规则已满足：相邻顶点均无建筑';
+  }
+  return `；⚠ 距离规则不满足：相邻顶点 ${adjacentBuildings.map((n) => `v${n}`).join('、')} 已有建筑`;
+}
+
+function stateWithRoad(s: GameState, edgeId: number, owner: number): GameState {
+  return {
+    ...s,
+    roads: {
+      ...s.roads,
+      [edgeId]: { owner },
+    },
+  };
+}
+
+function edgeBetween(b: Board, a: number, c: number) {
+  return b.edges.find((e) => (e.v1 === a && e.v2 === c) || (e.v1 === c && e.v2 === a));
+}
+
+function hasPlayerRoadOrBuildingAt(b: Board, s: GameState, vertexId: number, player: number): boolean {
+  const bld = s.buildings[vertexId];
+  if (bld) return bld.owner === player;
+  return b.edges.some(
+    (e) =>
+      (e.v1 === vertexId || e.v2 === vertexId) &&
+      s.roads[e.id] != null &&
+      s.roads[e.id].owner === player,
+  );
+}
+
+function describeBuildTarget(b: Board, vertexId: number): string {
+  const tiles = describeVertexTiles(b, vertexId);
+  const sum = vertexYieldPointSum(b, vertexId);
+  const kinds = vertexResourceKinds(b, vertexId).size;
+  const port = portText(b, vertexId);
+  return `v${vertexId}→${tiles} ${sum}产出点/${kinds}种${port}`;
+}
+
 /** 顶点上的建筑：返回 owner+类型，无则 null */
 function buildingAt(s: GameState, vertexId: number): { owner: number; type: 'settlement' | 'city' } | null {
   const b = s.buildings[vertexId];
@@ -67,35 +111,41 @@ function buildingAt(s: GameState, vertexId: number): { owner: number; type: 'set
 
 // ---------- 对外 API ----------
 
-/** 建/初始放房屋的 hint：周围 hex 摘要 + 港口 + pip 总分 */
-export function settlementHint(b: Board, vertexId: number): string {
+/** 建/初始放房屋的 hint：周围 hex 摘要 + 港口 + 产出点总分 */
+export function settlementHint(b: Board, s: GameState, vertexId: number): string {
   const tiles = describeVertexTiles(b, vertexId);
-  const sum = vertexPipSum(b, vertexId);
+  const sum = vertexYieldPointSum(b, vertexId);
   const kinds = vertexResourceKinds(b, vertexId).size;
   const port = portText(b, vertexId);
-  return `周边 ${tiles}；总产出 ${sum}pip；${kinds} 种资源${port}`;
+  const distance = distanceRuleText(b, s, vertexId);
+  return `周边 ${tiles}；总产出 ${sum}产出点；${kinds} 种资源${port}${distance}`;
 }
 
 /** 升级城市的 hint：同 vertexHint，但加"产出翻倍"提示 */
 export function cityHint(b: Board, vertexId: number): string {
   const tiles = describeVertexTiles(b, vertexId);
-  const sum = vertexPipSum(b, vertexId);
-  return `升级后产出翻倍：周边 ${tiles}；翻倍后 ${sum * 2}pip`;
+  const sum = vertexYieldPointSum(b, vertexId);
+  return `升级后产出翻倍：周边 ${tiles}；翻倍后 ${sum * 2}产出点`;
 }
 
 /**
  * 建/初始放路的 hint：
- *  - 若有一端是"可未来建房屋的空顶点"，描述其资源潜力（最有用的信息）
- *  - 若两端都已被建筑占据，说明"纯延长"
+ *  - 不把道路端点的资源误当成收益：端点若紧邻已有建筑，受距离规则约束不能建房
+ *  - 模拟修完此路后的可建点；若端点不可建，再看从该端点继续一条路后的隔点候选
  */
 export function roadHint(b: Board, s: GameState, edgeId: number, currentPlayer: number): string {
   const e = b.edges[edgeId];
   if (!e) return '?';
   const ends = [e.v1, e.v2];
-  const open = ends.filter((vid) => !buildingAt(s, vid));
   const occupied = ends.filter((vid) => !!buildingAt(s, vid));
+  const afterRoad = stateWithRoad(s, edgeId, currentPlayer);
+  const connectedBefore = new Set(
+    ends.filter((vid) => hasPlayerRoadOrBuildingAt(b, s, vid, currentPlayer)),
+  );
+  const frontier = ends.filter((vid) => !connectedBefore.has(vid));
+  const frontierEnds = frontier.length > 0 ? frontier : ends;
 
-  if (open.length === 0) {
+  if (occupied.length === ends.length) {
     const detail = occupied
       .map((vid) => {
         const b1 = buildingAt(s, vid)!;
@@ -106,21 +156,46 @@ export function roadHint(b: Board, s: GameState, edgeId: number, currentPlayer: 
     return `两端均已饱和：${detail}；仅延长路网长度`;
   }
 
-  // 优先描述空端的资源潜力
-  const targets = open.map((vid) => {
-    const tiles = describeVertexTiles(b, vid);
-    const sum = vertexPipSum(b, vid);
-    const port = portText(b, vid);
-    return `v${vid}→${tiles} ${sum}pip${port}`;
-  });
-  return `通往：${targets.join('；')}`;
+  const immediate = frontierEnds
+    .filter((vid) => !buildingAt(s, vid) && canBuildSettlement(b, afterRoad, vid, currentPlayer))
+    .map((vid) => describeBuildTarget(b, vid));
+
+  const oneMore = new Map<number, string>();
+  for (const from of frontierEnds) {
+    for (const to of b.vertices[from]?.neighbors ?? []) {
+      if (ends.includes(to)) continue;
+      const nextEdge = edgeBetween(b, from, to);
+      if (!nextEdge || nextEdge.id === edgeId || s.roads[nextEdge.id]) continue;
+      if (!canBuildRoad(b, afterRoad, nextEdge.id, currentPlayer)) continue;
+      const afterSecondRoad = stateWithRoad(afterRoad, nextEdge.id, currentPlayer);
+      if (!canBuildSettlement(b, afterSecondRoad, to, currentPlayer)) continue;
+      oneMore.set(to, `经 v${from} 再修 e${nextEdge.id} 到 ${describeBuildTarget(b, to)}`);
+    }
+  }
+
+  const blockedFrontier = frontierEnds
+    .filter((vid) => !buildingAt(s, vid) && !canBuildSettlement(b, afterRoad, vid, currentPlayer))
+    .map((vid) => {
+      const adjacent = b.vertices[vid]?.neighbors.filter((n) => !!s.buildings[n]) ?? [];
+      return adjacent.length > 0
+        ? `v${vid} 不能建：相邻 ${adjacent.map((n) => `v${n}`).join('、')} 已有建筑`
+        : `v${vid} 暂不能建`;
+    });
+
+  const parts = [];
+  parts.push(`路端 ${frontierEnds.map((vid) => `v${vid}`).join('、')}`);
+  if (blockedFrontier.length > 0) parts.push(blockedFrontier.join('；'));
+  if (immediate.length > 0) parts.push(`修完即可建：${immediate.join('；')}`);
+  if (oneMore.size > 0) parts.push(`隔点候选：${[...oneMore.values()].join('；')}`);
+  if (immediate.length === 0 && oneMore.size === 0) parts.push('暂未打开可建房屋位，仅延长路网/争最长路');
+  return parts.join('；');
 }
 
 /** 强盗目标 hint：该 hex 资源/数字 + 上面的玩家分布（可偷谁） */
 export function robberHint(b: Board, s: GameState, hexId: number, currentPlayer: number): string {
   const h = b.hexes[hexId];
   if (!h) return '?';
-  const tag = h.terrain === '沙漠' ? '沙漠' : `${h.terrain}${h.number ?? '?'}(${pips(h.number)}pip)`;
+  const tag = h.terrain === '沙漠' ? '沙漠' : `${h.terrain}${h.number ?? '?'}(${yieldPoints(h.number)}产出点)`;
 
   // 统计该 hex 6 个角点上的建筑分布
   const ownerCount = new Map<number, { settlements: number; cities: number }>();

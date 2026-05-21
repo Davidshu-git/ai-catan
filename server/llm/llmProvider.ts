@@ -25,7 +25,7 @@ const LLM_TEMPERATURE = Number(process.env.LLM_TEMPERATURE ?? 0.4);
 // LLM_HINT=0 关闭空间动作的语义化 hint，用于 A/B 对比
 const LLM_HINT_DEFAULT = process.env.LLM_HINT !== '0';
 
-const SYSTEM_PROMPT = `你是卡坦岛策略助手，正在替一名 AI 玩家做一步决策。
+export const LLM_SYSTEM_PROMPT = `你是卡坦岛策略助手，正在替一名 AI 玩家做一步决策。
 
 铁律：
 1. 你必须从给定的 legalActions 列表里挑一个 actionId（精确字符串匹配）；不要自创 id、不要补坐标
@@ -34,10 +34,12 @@ const SYSTEM_PROMPT = `你是卡坦岛策略助手，正在替一名 AI 玩家�
 4. 不要写规则解释、不要用代码块包裹、不要前后缀文字，只返回 JSON 本体
 5. 如果输入里有 agentProfile，你必须延续该 agent 的性格、偏好和记忆，但仍以当前合法动作列表为准
 6. 偏好：升级城市 > 建房屋 > 朝资源点修路 > 买发展卡 > END_TURN；银行兑换只在差 1 张关键资源时用
+7. 建房/初始放房屋必须遵守距离规则：任何房屋或城市的相邻顶点都不能再建房屋；legalActions 里已经过滤掉违规顶点
+8. 成本速查：道路=木1+砖1；房屋=木1+砖1+羊1+麦1；城市=麦2+矿3；发展卡=羊1+麦1+矿1。当前局面 JSON 里也有 costs 字段
 
 hint 阅读约定（仅空间动作有；没有 hint 的行就只看 label）：
-- "麦8(5)" = 该地块 麦田、点数 8、骰子概率 pip=5（pip 越高产出概率越大，6/8=5 最高）
-- "总产出 12pip" = 顶点周边三块地的 pip 总和（不含沙漠）
+- "麦8(5产出点)" = 该地块是麦，骰点为 8，产出点为 5；产出点不是资源数量，而是骰子概率权重（6/8 最高）
+- "总产出 12产出点" = 顶点周边三块地的产出点总和（不含沙漠）
 - "港口(木2:1)" / "港口(通用3:1)" = 该顶点附带港口
 - "通往：v23→..." = 该路通向的空顶点的资源潜力
 - "⚠" = 明显不利提示（如强盗只压己方建筑）`;
@@ -52,7 +54,7 @@ interface AnthropicResp {
  * 压紧 legalActions：每行 `id<TAB>label[<TAB>hint]`，hint 可选。
  * hint 仅出现在空间动作上（见 actionHints.ts），可由 useHint=false 一键关掉。
  */
-function formatLegalActions(actions: LegalAction[], useHint: boolean): string {
+export function formatLegalActions(actions: LegalAction[], useHint: boolean): string {
   return actions
     .map((a) => {
       if (useHint && a.hint) return `${a.id}\t${a.label}\t${a.hint}`;
@@ -62,7 +64,7 @@ function formatLegalActions(actions: LegalAction[], useHint: boolean): string {
 }
 
 /** 压紧 PlayerView：自己全留，他人只留摘要，hexes 留 id+terrain+number+robber */
-function formatView(view: PlayerView): string {
+export function formatView(view: PlayerView): string {
   return JSON.stringify({
     phase: view.phase,
     turn: view.turn,
@@ -74,6 +76,7 @@ function formatView(view: PlayerView): string {
     self: view.self,
     others: view.others,
     myBuildings: view.myBuildings,
+    costs: view.costs,
     hexes: view.hexes,
     ports: view.ports,
     pendingTradeForMe: view.pendingTradeForMe,
@@ -81,7 +84,7 @@ function formatView(view: PlayerView): string {
   });
 }
 
-function buildUserMessage(input: LlmDecisionInput, useHint: boolean): string {
+export function buildLlmUserMessage(input: LlmDecisionInput, useHint: boolean): string {
   const parts: string[] = [];
   if (input.agent) {
     parts.push('你的独立 agent 身份（JSON）：');
@@ -225,8 +228,8 @@ export function createLlmProvider(opts: LlmProviderOptions): AiDecisionProvider 
   return {
     name: `llm(${model}${useHint ? '+hint' : ''})`,
     async decide(input: LlmDecisionInput): Promise<LlmDecisionOutput> {
-      const userMsg = buildUserMessage(input, useHint);
-      const raw = await callMinimax(opts.apiKey, host, model, SYSTEM_PROMPT, userMsg);
+      const userMsg = buildLlmUserMessage(input, useHint);
+      const raw = await callMinimax(opts.apiKey, host, model, LLM_SYSTEM_PROMPT, userMsg);
       let parsed: unknown;
       try {
         parsed = extractJson(raw);

@@ -12,7 +12,13 @@ import type { Action } from '../../shared/reducer';
 import type { PlayerView } from './stateTranslator';
 
 // 协议层事件类型从 shared/protocol re-export，server 内部按惯例走 ./types
-export type { AiThoughtEvent, AiErrorEvent } from '../../shared/protocol';
+export type {
+  AiThoughtEvent,
+  AiErrorEvent,
+  AiModelContextEvent,
+  AiTimingEvent,
+  AiTimingStage,
+} from '../../shared/protocol';
 
 /** 每个 AI 玩家独立注入的 agent 上下文：性格 + 短期记忆 */
 export interface AgentPromptContext {

@@ -7,7 +7,7 @@
 // ============================================================
 
 import type { Board, GameState, Phase, Resource, ResMap, Port } from '../../shared/types';
-import { RESOURCES } from '../../shared/types';
+import { COSTS, RESOURCES } from '../../shared/types';
 import { handSize, publicVP, longestRoadLength, tradeRatio } from '../../shared/rules';
 
 /** 单个地块（去掉像素坐标，只留逻辑信息） */
@@ -72,6 +72,13 @@ export interface PlayerView {
   ports: Array<{ vertex: number; port: Port }>;
   /** 本玩家所有建筑/道路（自己的也单列方便 LLM） */
   myBuildings: { settlements: number[]; cities: number[]; roads: number[] };
+  /** 建造成本速查；用于资源规划，legalActions 仍是唯一合法动作来源 */
+  costs: {
+    road: Partial<ResMap>;
+    settlement: Partial<ResMap>;
+    city: Partial<ResMap>;
+    dev: Partial<ResMap>;
+  };
   /** 最近 10 条游戏日志（给 LLM 上下文） */
   recentLog: string[];
   /** 待应答的交易（若 me 是 to 方） */
@@ -149,6 +156,12 @@ export function buildPlayerView(b: Board, s: GameState, me: number): PlayerView 
       settlements: settlements[me] ?? [],
       cities: cities[me] ?? [],
       roads: roadsByOwner[me] ?? [],
+    },
+    costs: {
+      road: { ...COSTS.road },
+      settlement: { ...COSTS.settlement },
+      city: { ...COSTS.city },
+      dev: { ...COSTS.dev },
     },
     recentLog: s.log.slice(-10).map((l) => l.text),
     pendingTradeForMe:

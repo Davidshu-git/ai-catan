@@ -2,7 +2,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { io, type Socket } from 'socket.io-client';
 import { Board, type BoardMode } from './components/Board';
 import { robberCandidates, type Action } from '../shared/reducer';
-import type { AiControlState, AiErrorEvent, AiThoughtEvent } from '../shared/protocol';
+import type {
+  AiControlState,
+  AiErrorEvent,
+  AiModelContextEvent,
+  AiTimingEvent,
+  AiThoughtEvent,
+} from '../shared/protocol';
 import {
   handSize,
   longestRoadLength,
@@ -1066,6 +1072,83 @@ function PendingTrade({ game, dispatch }: { game: FullGame; dispatch: (a: Action
 
 // ---------- AI 思考流 ----------
 
+function countText(n: number | undefined): string {
+  return n == null ? '0' : n.toLocaleString('zh-CN');
+}
+
+function msText(ms: number | undefined): string {
+  if (ms == null) return '0ms';
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  return `${(ms / 1000).toFixed(ms < 10_000 ? 2 : 1)}s`;
+}
+
+function stageTotal(timing: AiTimingEvent, key: string): number {
+  return timing.stages
+    .filter((s) => s.key === key || s.key.startsWith(`${key}-`))
+    .reduce((sum, s) => sum + s.ms, 0);
+}
+
+function TimingPanel({ timing }: { timing: AiTimingEvent }) {
+  const providerMs = stageTotal(timing, 'provider') + stageTotal(timing, 'fallback-provider');
+  return (
+    <details className="thought-timing">
+      <summary>
+        <span>时延</span>
+        <span>总 {msText(timing.serverTotalMs ?? timing.totalMs)}</span>
+        <span>模型 {msText(providerMs)}</span>
+        {timing.queueMs != null && <span>排队 {msText(timing.queueMs)}</span>}
+      </summary>
+      <div className="thought-timing-grid">
+        {timing.decisionMs != null && <span>决策 {msText(timing.decisionMs)}</span>}
+        {timing.commitMs != null && <span>提交 {msText(timing.commitMs)}</span>}
+        <span>阶段 {timing.stages.length}</span>
+      </div>
+      <div className="thought-timing-stages">
+        {timing.stages.map((s, idx) => (
+          <div key={`${s.key}-${idx}`} className="thought-timing-stage">
+            <span>{s.label}</span>
+            <strong>{msText(s.ms)}</strong>
+            {s.detail && <em>{s.detail}</em>}
+          </div>
+        ))}
+      </div>
+    </details>
+  );
+}
+
+function ModelContextBlock({ title, text }: { title: string; text?: string }) {
+  if (!text) return null;
+  return (
+    <div className="thought-context-block">
+      <div className="thought-context-title">{title}</div>
+      <pre>{text}</pre>
+    </div>
+  );
+}
+
+function ModelContextPanel({ context }: { context: AiModelContextEvent }) {
+  const label = context.format === 'llm-prompt' ? '模型输入' : 'Provider 输入';
+  return (
+    <details className="thought-context">
+      <summary>
+        <span>{label}</span>
+        <span>{countText(context.chars.total)} 字</span>
+        <span>{context.legalActionCount} 动作</span>
+        {context.retryFeedbackCount > 0 && <span>{context.retryFeedbackCount} 次反馈</span>}
+      </summary>
+      <div className="thought-context-stats">
+        <span>view {countText(context.chars.view)}</span>
+        <span>actions {countText(context.chars.legalActions)}</span>
+        {context.chars.system != null && <span>system {countText(context.chars.system)}</span>}
+        {context.chars.user != null && <span>user {countText(context.chars.user)}</span>}
+      </div>
+      <ModelContextBlock title="system" text={context.systemPrompt} />
+      <ModelContextBlock title="user" text={context.userPrompt} />
+      <ModelContextBlock title="provider input" text={context.providerInputJson} />
+    </details>
+  );
+}
+
 function ThoughtLog({
   items,
   players,
@@ -1106,6 +1189,8 @@ function ThoughtLog({
                       ◇ {t.actionHint}
                     </div>
                   )}
+                  {t.timing && <TimingPanel timing={t.timing} />}
+                  {t.modelContext && <ModelContextPanel context={t.modelContext} />}
                 </div>
               );
             }
@@ -1120,6 +1205,8 @@ function ThoughtLog({
                   <span className="thought-tag thought-tag-err">错误</span>
                 </div>
                 <div className="thought-text">{e.message}</div>
+                {e.timing && <TimingPanel timing={e.timing} />}
+                {e.modelContext && <ModelContextPanel context={e.modelContext} />}
               </div>
             );
           })}

@@ -463,6 +463,134 @@ select {
   line-height: 1.4;
 }
 
+.thought-timing {
+  margin-top: 7px;
+  border-top: 1px dashed rgba(58, 44, 33, 0.28);
+  padding-top: 6px;
+}
+
+.thought-timing summary {
+  cursor: pointer;
+  color: #3f4f31;
+  font-size: 12px;
+  font-weight: 900;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  align-items: center;
+}
+
+.thought-timing summary span {
+  border: 1px solid rgba(82, 107, 59, 0.38);
+  background: rgba(214, 208, 173, 0.38);
+  border-radius: 3px;
+  padding: 1px 5px;
+}
+
+.thought-timing-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin: 6px 0;
+  color: #5f624c;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.thought-timing-grid span {
+  border-bottom: 1px solid rgba(82, 107, 59, 0.25);
+}
+
+.thought-timing-stages {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-top: 5px;
+}
+
+.thought-timing-stage {
+  display: grid;
+  grid-template-columns: minmax(86px, 1fr) auto;
+  gap: 5px 8px;
+  align-items: baseline;
+  color: #332a23;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.thought-timing-stage strong {
+  color: var(--accent-d);
+  font-size: 11px;
+}
+
+.thought-timing-stage em {
+  grid-column: 1 / -1;
+  color: #6b6353;
+  font-style: normal;
+  overflow-wrap: anywhere;
+}
+
+.thought-context {
+  margin-top: 7px;
+  border-top: 1px dashed rgba(58, 44, 33, 0.34);
+  padding-top: 6px;
+}
+
+.thought-context summary {
+  cursor: pointer;
+  color: var(--accent-d);
+  font-size: 12px;
+  font-weight: 900;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  align-items: center;
+}
+
+.thought-context summary span {
+  border: 1px solid rgba(100, 42, 36, 0.35);
+  background: rgba(246, 237, 215, 0.42);
+  border-radius: 3px;
+  padding: 1px 5px;
+}
+
+.thought-context-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin: 6px 0;
+  color: #6b6353;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.thought-context-block {
+  margin-top: 6px;
+}
+
+.thought-context-title {
+  color: #66513e;
+  font-size: 11px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.thought-context pre {
+  margin-top: 3px;
+  max-height: 240px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: rgba(36, 29, 26, 0.08);
+  border: 1px solid rgba(58, 44, 33, 0.28);
+  border-radius: 4px;
+  padding: 7px;
+  color: #2f2925;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 10.5px;
+  line-height: 1.45;
+}
+
 .hint {
   background: #d7d0ad;
   border: 2px solid var(--line);

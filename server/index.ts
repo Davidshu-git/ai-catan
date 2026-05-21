@@ -22,7 +22,7 @@ import { aiAcceptsTrade } from '../shared/ai';
 import { RESOURCES, type FullGame, type GameState, type ResMap } from '../shared/types';
 import type { AiControlState } from '../shared/protocol';
 
-import type { AiDecisionProvider, AiErrorEvent, AiThoughtEvent } from './llm/types';
+import type { AiDecisionProvider, AiErrorEvent, AiThoughtEvent, AiTimingEvent } from './llm/types';
 import { createRuleProvider } from './llm/ruleProvider';
 import { createMockProvider } from './llm/mockProvider';
 import { createLlmProvider } from './llm/llmProvider';
@@ -200,6 +200,39 @@ function rememberThought(session: Session, ev: AiThoughtEvent) {
   ev.agentMemorySize = agent.memory.length;
 }
 
+function withScheduleTiming<T extends { timing?: AiTimingEvent }>(
+  ev: T,
+  scheduledAt: number,
+  stepStartedAt: number,
+  commitMs: number,
+): T {
+  const finishedAt = Date.now();
+  const queueMs = Math.max(0, stepStartedAt - scheduledAt);
+  const serverTotalMs = Math.max(0, finishedAt - scheduledAt);
+  const timing =
+    ev.timing ??
+    ({
+      startedAt: stepStartedAt,
+      finishedAt,
+      totalMs: Math.max(0, finishedAt - stepStartedAt),
+      decisionMs: Math.max(0, finishedAt - stepStartedAt),
+      stages: [],
+    } satisfies AiTimingEvent);
+
+  timing.queueMs = queueMs;
+  timing.commitMs = commitMs;
+  timing.serverTotalMs = serverTotalMs;
+  timing.totalMs = serverTotalMs;
+  timing.finishedAt = finishedAt;
+  timing.stages = [
+    { key: 'queue', label: 'AI 调度等待', ms: queueMs },
+    ...timing.stages.filter((s) => s.key !== 'queue' && s.key !== 'commit'),
+    { key: 'commit', label: '状态提交 / sync_state 广播', ms: commitMs },
+  ];
+  ev.timing = timing;
+  return ev;
+}
+
 function buildProvider(
   name: string,
   board: FullGame['board'],
@@ -245,7 +278,9 @@ function scheduleAI(
     return;
   }
 
+  const scheduledAt = Date.now();
   session.aiTimer = setTimeout(async () => {
+    const stepStartedAt = Date.now();
     session.aiTimer = null;
     const { game } = session;
     if (!hasAiWork(game.state)) {
@@ -272,6 +307,7 @@ function scheduleAI(
         game.state,
         provider,
         agent ? toAgentPromptContext(agent) : undefined,
+        { promptUseHint: session.aiHint },
       );
     } catch (err) {
       decisionError = err;
@@ -320,12 +356,23 @@ function scheduleAI(
     }
 
     // 应用新状态并广播
+    const commitStartedAt = Date.now();
     session.game = { board: game.board, state: outcome.nextState };
     session.version++;
     broadcastState(io, roomId);
+    const commitMs = Math.max(0, Date.now() - commitStartedAt);
     // 中途收集的错误（重试 / fallback）先发；成功的 thought 后发
-    for (const e of outcome.errors) emitError(io, roomId, session, e);
-    if (outcome.kind === 'applied') emitThought(io, roomId, session, outcome.thought);
+    for (const e of outcome.errors) {
+      emitError(io, roomId, session, withScheduleTiming(e, scheduledAt, stepStartedAt, commitMs));
+    }
+    if (outcome.kind === 'applied') {
+      emitThought(
+        io,
+        roomId,
+        session,
+        withScheduleTiming(outcome.thought, scheduledAt, stepStartedAt, commitMs),
+      );
+    }
 
     emitAiControl(io, roomId, session);
     if (session.aiAutoplay && !opts.singleStep) scheduleAI(io, roomId);

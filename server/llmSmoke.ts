@@ -6,6 +6,7 @@
 import { createLlmProvider } from './llm/llmProvider';
 import type { LegalAction, LlmDecisionInput } from './llm/types';
 import type { PlayerView } from './llm/stateTranslator';
+import { COSTS } from '../shared/types';
 
 const apiKey = process.env.MINIMAX_API_KEY;
 if (!apiKey) {
@@ -40,6 +41,12 @@ const view: PlayerView = {
   hexes: [],
   ports: [],
   myBuildings: { settlements: [10, 22], cities: [], roads: [3, 5] },
+  costs: {
+    road: { ...COSTS.road },
+    settlement: { ...COSTS.settlement },
+    city: { ...COSTS.city },
+    dev: { ...COSTS.dev },
+  },
   recentLog: ['你的回合开始', '你掷出 7 → 已结算'],
   pendingTradeForMe: null,
 };

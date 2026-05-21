@@ -50,6 +50,28 @@ function shade(hex: string, f: number): string {
   return `#${((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1)}`;
 }
 
+function edgeLabelPosition(
+  e: { x1: number; y1: number; x2: number; y2: number },
+  cx: number,
+  cy: number,
+): { x: number; y: number } {
+  const mx = (e.x1 + e.x2) / 2;
+  const my = (e.y1 + e.y2) / 2;
+  const dx = e.x2 - e.x1;
+  const dy = e.y2 - e.y1;
+  const len = Math.hypot(dx, dy) || 1;
+  let nx = -dy / len;
+  let ny = dx / len;
+
+  // 编号稍微偏到棋盘外侧，避免直接压在道路线上。
+  if (nx * (mx - cx) + ny * (my - cy) < 0) {
+    nx = -nx;
+    ny = -ny;
+  }
+
+  return { x: mx + nx * 9, y: my + ny * 9 };
+}
+
 /** 每种地形的卡通装饰（裁剪在六边形内） */
 function Motif({ h }: { h: Hex }) {
   const x = h.cx;
@@ -463,6 +485,50 @@ export function Board({
           </g>
         );
       })}
+
+      {/* 边 / 顶点编号调试层 */}
+      <g pointerEvents="none">
+        {board.edges.map((e) => {
+          const pos = edgeLabelPosition(e, bcx, bcy);
+          return (
+            <text
+              key={`edge-label-${e.id}`}
+              x={pos.x}
+              y={pos.y}
+              textAnchor="middle"
+              dominantBaseline="middle"
+              fontSize={8}
+              fontWeight={900}
+              fill="#31261f"
+              stroke={PAPER}
+              strokeWidth={2.4}
+              paintOrder="stroke"
+              opacity={0.88}
+            >
+              e{e.id}
+            </text>
+          );
+        })}
+
+        {board.vertices.map((v) => (
+          <text
+            key={`vertex-label-${v.id}`}
+            x={v.x}
+            y={v.y - 13}
+            textAnchor="middle"
+            dominantBaseline="middle"
+            fontSize={8}
+            fontWeight={900}
+            fill="#7d2f2b"
+            stroke={PAPER}
+            strokeWidth={2.6}
+            paintOrder="stroke"
+            opacity={0.92}
+          >
+            v{v.id}
+          </text>
+        ))}
+      </g>
     </svg>
   );
 }
