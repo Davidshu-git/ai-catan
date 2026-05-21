@@ -42,7 +42,14 @@ const view: PlayerView = {
   robber: 9,
   hexes: [],
   ports: [],
-  myBuildings: { settlements: [10, 22], cities: [], roads: [3, 5] },
+  myBuildings: {
+    settlements: [10, 22],
+    cities: [],
+    roads: [3, 5],
+    settlementSummaries: ['v10→麦8(5产出点) 矿6(5产出点)', 'v22→木3(2产出点)'],
+    citySummaries: [],
+    roadSummaries: ['e3: v10[麦8,矿6]↔v11[麦8]', 'e5: v22[木3]↔v23[木3,砖4]'],
+  },
   costs: {
     road: { ...COSTS.road },
     settlement: { ...COSTS.settlement },

@@ -184,6 +184,7 @@ const DEFAULT_AI_CONTROL: AiControlState = {
   hintEnabled: true,
   provider: 'unknown',
   agentProviders: {},
+  agentPersonalities: {},
 };
 
 const EMPTY_AI_STEP_TIMER: AiStepTimer = {
@@ -558,6 +559,7 @@ export function App() {
                   : null
             }
             agentProviders={aiControl.agentProviders}
+            agentPersonalities={aiControl.agentPersonalities}
             connected={connected}
             onToggleProvider={setAiProvider}
           />
@@ -635,7 +637,7 @@ function AiControls({
       <div className="btn-grid btn-grid-3">
         <button
           type="button"
-          className={`btn${control.hintEnabled ? '' : ' primary'}`}
+          className={`btn${control.hintEnabled ? ' primary' : ''}`}
           disabled={!connected}
           onClick={() => onToggleHint(!control.hintEnabled)}
           title="切换是否在 LLM prompt 里塞空间动作 hint；A/B 实验用，仅影响后续决策"
@@ -643,7 +645,7 @@ function AiControls({
           hint
         </button>
         <button
-          className={`btn${control.autoplay ? '' : ' primary'}`}
+          className={`btn${control.autoplay ? ' primary' : ''}`}
           disabled={!connected}
           onClick={() => onAutoplay(!control.autoplay)}
         >
@@ -663,12 +665,14 @@ function Players({
   game,
   processingMs,
   agentProviders,
+  agentPersonalities,
   connected,
   onToggleProvider,
 }: {
   game: FullGame;
   processingMs: number | null;
   agentProviders: Record<number, string>;
+  agentPersonalities: Record<number, string>;
   connected: boolean;
   onToggleProvider: (playerId: number, useLlm: boolean) => void;
 }) {
@@ -705,6 +709,7 @@ function Players({
             <div
               key={pl.id}
               className={`player-row${state.current === pl.id ? ' active' : ''}`}
+              title={pl.isAI ? agentPersonalities[pl.id] : undefined}
             >
               <div className="player-head">
                 <span className="player-dot" style={{ background: pl.color }} />
@@ -1407,6 +1412,16 @@ function ThoughtLogContent({
                     )}
                   </div>
                   <div className="thought-text">{t.thought}</div>
+                  {t.turnGoal && (
+                    <div className="thought-goal" title="LLM 声明的本回合目标">
+                      ▸ 本回合：{t.turnGoal}
+                    </div>
+                  )}
+                  {t.stance && (
+                    <div className="thought-stance" title="LLM 声明的长期策略阶段">
+                      ◈ 策略：{t.stance}
+                    </div>
+                  )}
                   <div className="thought-action">→ {t.actionSummary}</div>
                   {t.actionHint && (
                     <div className="thought-hint" title="该动作的语义化情报（喂给 LLM 的 hint）">

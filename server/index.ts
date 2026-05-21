@@ -143,8 +143,10 @@ function getDecisionAgent(session: Session, state = session.game.state): AiAgent
 function getAiControlState(session: Session): AiControlState {
   const currentAgent = getDecisionAgent(session);
   const agentProviders: Record<number, string> = {};
+  const agentPersonalities: Record<number, string> = {};
   for (const agent of Object.values(session.agents)) {
     agentProviders[agent.playerId] = agent.providerName;
+    agentPersonalities[agent.playerId] = agent.personality;
   }
   return {
     autoplay: session.aiAutoplay,
@@ -154,6 +156,7 @@ function getAiControlState(session: Session): AiControlState {
     hintEnabled: session.aiHint,
     provider: currentAgent?.providerName ?? session.aiProvider,
     agentProviders,
+    agentPersonalities,
     currentAgent: currentAgent
       ? {
           player: currentAgent.playerId,
@@ -205,6 +208,13 @@ function rememberThought(session: Session, ev: AiThoughtEvent) {
     thought: ev.thought,
     actionSummary: ev.actionSummary,
   });
+  // 更新意图：LLM 给了新的 turnGoal/stance 就采纳；END_TURN 时清空 currentTurnGoal
+  if (ev.turnGoal) agent.currentTurnGoal = ev.turnGoal;
+  if (ev.stance) agent.stance = ev.stance;
+  if (ev.action?.type === 'END_TURN') agent.currentTurnGoal = undefined;
+  // 回写最新意图给前端展示（即便 LLM 没给，也能保留 server 端 agent 的当前态）
+  ev.turnGoal = agent.currentTurnGoal;
+  ev.stance = agent.stance;
   ev.agentMemorySize = agent.memory.length;
 }
 

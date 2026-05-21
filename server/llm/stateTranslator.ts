@@ -9,6 +9,7 @@
 import type { Board, GameState, Phase, Resource, ResMap, Port } from '../../shared/types';
 import { COSTS, RESOURCES } from '../../shared/types';
 import { handSize, publicVP, longestRoadLength, tradeRatio } from '../../shared/rules';
+import { buildingSummary, roadSummary } from './actionHints';
 
 /** 单个地块（去掉像素坐标，只留逻辑信息） */
 export interface HexSummary {
@@ -58,6 +59,12 @@ export interface OtherPlayerView {
   cities: number[];
   /** 拥有的道路边 id */
   roads: number[];
+  /** settlements 的空间情报（同序对应），形如 "v17→麦8(5产出点) ... 港口(羊2:1)" */
+  settlementSummaries: string[];
+  /** cities 的空间情报（同序对应） */
+  citySummaries: string[];
+  /** roads 的空间情报，形如 "e34: v17[麦8,矿6]↔v18[麦8,木3]" */
+  roadSummaries: string[];
   longestRoadLen: number;
 }
 
@@ -76,8 +83,15 @@ export interface PlayerView {
   hexes: HexSummary[];
   /** 港口位置：顶点 id → 港口类型 */
   ports: Array<{ vertex: number; port: Port }>;
-  /** 本玩家所有建筑/道路（自己的也单列方便 LLM） */
-  myBuildings: { settlements: number[]; cities: number[]; roads: number[] };
+  /** 本玩家所有建筑/道路（自己的也单列方便 LLM，含空间情报） */
+  myBuildings: {
+    settlements: number[];
+    cities: number[];
+    roads: number[];
+    settlementSummaries: string[];
+    citySummaries: string[];
+    roadSummaries: string[];
+  };
   /** 建造成本速查；用于资源规划，legalActions 仍是唯一合法动作来源 */
   costs: {
     road: Partial<ResMap>;
@@ -139,6 +153,9 @@ export function buildPlayerView(b: Board, s: GameState, me: number): PlayerView 
       .filter((p) => p.id !== me)
       .map((p) => {
         const h = handSize(p);
+        const settle = settlements[p.id] ?? [];
+        const city = cities[p.id] ?? [];
+        const rd = roadsByOwner[p.id] ?? [];
         return {
           id: p.id,
           name: p.name,
@@ -148,9 +165,12 @@ export function buildPlayerView(b: Board, s: GameState, me: number): PlayerView 
           devCardCount: p.devCards.length + p.newDevCards.length,
           knightsPlayed: p.knightsPlayed,
           publicVP: publicVP(s, p.id),
-          settlements: settlements[p.id] ?? [],
-          cities: cities[p.id] ?? [],
-          roads: roadsByOwner[p.id] ?? [],
+          settlements: settle,
+          cities: city,
+          roads: rd,
+          settlementSummaries: settle.map((v) => buildingSummary(b, v)),
+          citySummaries: city.map((v) => buildingSummary(b, v)),
+          roadSummaries: rd.map((e) => roadSummary(b, e)),
           longestRoadLen: longestRoadLength(b, s, p.id),
         };
       }),
@@ -165,11 +185,19 @@ export function buildPlayerView(b: Board, s: GameState, me: number): PlayerView 
     ports: b.vertices
       .filter((v) => v.port != null)
       .map((v) => ({ vertex: v.id, port: v.port! })),
-    myBuildings: {
-      settlements: settlements[me] ?? [],
-      cities: cities[me] ?? [],
-      roads: roadsByOwner[me] ?? [],
-    },
+    myBuildings: (() => {
+      const settle = settlements[me] ?? [];
+      const city = cities[me] ?? [];
+      const rd = roadsByOwner[me] ?? [];
+      return {
+        settlements: settle,
+        cities: city,
+        roads: rd,
+        settlementSummaries: settle.map((v) => buildingSummary(b, v)),
+        citySummaries: city.map((v) => buildingSummary(b, v)),
+        roadSummaries: rd.map((e) => roadSummary(b, e)),
+      };
+    })(),
     costs: {
       road: { ...COSTS.road },
       settlement: { ...COSTS.settlement },

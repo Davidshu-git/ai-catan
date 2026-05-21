@@ -63,6 +63,10 @@ export interface AiThoughtEvent {
   agentName?: string;
   agentPersonality?: string;
   agentMemorySize?: number;
+  /** LLM 声明的本回合目标（END_TURN 时由 controller 清空） */
+  turnGoal?: string;
+  /** LLM 声明的长期策略阶段 */
+  stance?: string;
   phase: Phase;
   thought: string;
   actionId: string;
@@ -118,6 +122,8 @@ export interface AiControlState {
   provider: string;
   /** 各 AI 席位当前的 provider；前端按玩家展示开关时使用 */
   agentProviders: Record<number, string>;
+  /** 各 AI 席位的角色策略提示词（即 LLM prompt 内 agent.personality 字段）；前端用作悬浮提示 */
+  agentPersonalities: Record<number, string>;
   currentAgent?: {
     player: number;
     name: string;

@@ -17,6 +17,10 @@ export interface AiAgentRuntime {
   personality: string;
   memory: string[];
   decisionCount: number;
+  /** 本回合目标（LLM 声明）；END_TURN 时清空 */
+  currentTurnGoal?: string;
+  /** 较慢变化的长期策略阶段 */
+  stance?: string;
 }
 
 export interface AgentDecisionMemory {
@@ -63,6 +67,8 @@ export function toAgentPromptContext(agent: AiAgentRuntime): AgentPromptContext 
     personality: agent.personality,
     memory: [...agent.memory],
     decisionCount: agent.decisionCount,
+    currentTurnGoal: agent.currentTurnGoal,
+    stance: agent.stance,
   };
 }
 

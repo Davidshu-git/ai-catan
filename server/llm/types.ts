@@ -20,7 +20,7 @@ export type {
   AiTimingStage,
 } from '../../shared/protocol';
 
-/** 每个 AI 玩家独立注入的 agent 上下文：性格 + 短期记忆 */
+/** 每个 AI 玩家独立注入的 agent 上下文：性格 + 短期记忆 + 当前意图 */
 export interface AgentPromptContext {
   playerId: number;
   name: string;
@@ -28,6 +28,10 @@ export interface AgentPromptContext {
   personality: string;
   memory: string[];
   decisionCount: number;
+  /** 本回合声明的目标（END_TURN 后清空），用于跨步保持连贯性 */
+  currentTurnGoal?: string;
+  /** 较慢变化的策略阶段（如"最长路+城市混合"）；可选 */
+  stance?: string;
 }
 
 /** 单条合法动作：稳定 ID + 中文摘要 + 真正派发的 Action */
@@ -66,6 +70,10 @@ export interface LlmDecisionInput {
 export interface LlmDecisionOutput {
   thought: string;
   actionId: string;
+  /** 本回合简短目标（10-20 字），LLM 可选给出；END_TURN 时由 controller 清空 */
+  turnGoal?: string;
+  /** 长期策略阶段（可选；与上一次大致一致就别变） */
+  stance?: string;
 }
 
 /** Provider 抽象：rule / mock / 真实 LLM 实现这一个接口 */

@@ -149,7 +149,7 @@ body {
   font: inherit;
   font-size: 12px;
   font-weight: 900;
-  color: var(--muted);
+  color: var(--ink);
   background: rgba(232, 215, 180, 0.5);
   border: 2px solid rgba(58, 44, 33, 0.5);
   border-radius: 5px;
@@ -296,7 +296,7 @@ body {
   flex-direction: column;
   align-items: center;
   min-width: 0;
-  color: var(--muted);
+  color: var(--ink);
   font-size: 9px;
   font-weight: 700;
   line-height: 1.05;
@@ -347,7 +347,7 @@ body {
 }
 
 .player-res-key {
-  color: var(--muted);
+  color: var(--ink);
   font-size: 9px;
   font-weight: 900;
   line-height: 1;
@@ -403,7 +403,7 @@ body {
 .btn-grid.btn-grid-3 { grid-template-columns: repeat(3, 1fr); }
 .btn-grid .btn { width: 100%; }
 .btn-col { display: flex; flex-direction: column; gap: 9px; }
-.cost { font-size: 10px; color: var(--muted); font-weight: 800; display: block; margin-top: 3px; }
+.cost { font-size: 10px; color: var(--ink); font-weight: 800; display: block; margin-top: 3px; }
 
 select {
   font: inherit;
@@ -602,6 +602,22 @@ select {
   font-size: 12px;
   font-style: italic;
   font-weight: 500;
+  line-height: 1.4;
+}
+
+.thought-goal {
+  margin-top: 3px;
+  color: var(--accent-d);
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.4;
+}
+
+.thought-stance {
+  margin-top: 2px;
+  color: var(--good);
+  font-size: 11.5px;
+  font-weight: 800;
   line-height: 1.4;
 }
 

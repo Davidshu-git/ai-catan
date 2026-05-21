@@ -195,6 +195,8 @@ export async function decideAiStep(
           provider: provider.name,
           retries: attempt,
           status: 'success',
+          turnGoal: output.turnGoal,
+          stance: output.stance,
           ts: Date.now(),
         },
         errors,

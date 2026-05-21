@@ -103,6 +103,29 @@ function describeBuildTarget(b: Board, vertexId: number): string {
   return `v${vertexId}→${tiles} ${sum}产出点/${kinds}种${port}`;
 }
 
+/** 顶点周边 hex 短标签，用于道路端点压缩描述："麦8,矿6,木3" */
+function vertexTilesShort(b: Board, vertexId: number): string {
+  const v = b.vertices[vertexId];
+  if (!v) return '?';
+  const parts = v.hexes
+    .map((hid) => b.hexes[hid])
+    .filter((h): h is NonNullable<typeof h> => h != null)
+    .map((h) => (h.terrain === '沙漠' || h.number == null ? '沙漠' : `${h.terrain}${h.number}`));
+  return parts.length > 0 ? parts.join(',') : '?';
+}
+
+/** 房屋/城市建筑的空间情报；用于把对手 / 自己已建顶点翻译给 LLM */
+export function buildingSummary(b: Board, vertexId: number): string {
+  return describeBuildTarget(b, vertexId);
+}
+
+/** 道路的空间情报：两端顶点的 hex 短标签 */
+export function roadSummary(b: Board, edgeId: number): string {
+  const e = b.edges[edgeId];
+  if (!e) return `e${edgeId}: ?`;
+  return `e${edgeId}: v${e.v1}[${vertexTilesShort(b, e.v1)}]↔v${e.v2}[${vertexTilesShort(b, e.v2)}]`;
+}
+
 /** 顶点上的建筑：返回 owner+类型，无则 null */
 function buildingAt(s: GameState, vertexId: number): { owner: number; type: 'settlement' | 'city' } | null {
   const b = s.buildings[vertexId];
