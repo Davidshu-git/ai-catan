@@ -20,11 +20,11 @@ import type { Board, GameState, Resource, ResMap } from './types';
 import { COSTS, RESOURCES, pips } from './types';
 
 const IMPORTANCE: Record<Resource, number> = {
-  wood: 1.1,
-  brick: 1.1,
-  sheep: 1.0,
-  wheat: 1.2,
-  ore: 1.15,
+  木: 1.1,
+  砖: 1.1,
+  羊: 1.0,
+  麦: 1.2,
+  矿: 1.15,
 };
 
 /** 顶点的资源潜力评分 */
@@ -34,12 +34,12 @@ function vertexValue(b: Board, v: number): number {
   const terr = new Set<string>();
   for (const hid of vx.hexes) {
     const h = b.hexes[hid];
-    if (h.terrain === 'desert') continue;
+    if (h.terrain === '沙漠') continue;
     val += pips(h.number) * IMPORTANCE[h.terrain as Resource];
     terr.add(h.terrain);
   }
   val += terr.size * 0.6; // 资源多样性
-  if (vx.port) val += vx.port === 'any' ? 0.6 : 1.0;
+  if (vx.port) val += vx.port === '通用' ? 0.6 : 1.0;
   return val;
 }
 
@@ -277,7 +277,7 @@ function aiMain(b: Board, s: GameState): Action {
     if (t) return t;
   }
   // 7) 打骑士卡：抢最大军队或赶走压在自己地块上的强盗
-  if (!s.devPlayed && me.devCards.includes('knight')) {
+  if (!s.devPlayed && me.devCards.includes('骑士')) {
     const robberHurtsMe = b.hexes[s.robber].corners.some(
       (v) => s.buildings[v]?.owner === s.current,
     );
@@ -287,7 +287,7 @@ function aiMain(b: Board, s: GameState): Action {
     if (robberHurtsMe || couldGetArmy) return { type: 'PLAY_KNIGHT' };
   }
   // 8) 丰收卡：差 2 张牌就用
-  if (!s.devPlayed && me.devCards.includes('yearOfPlenty')) {
+  if (!s.devPlayed && me.devCards.includes('丰收')) {
     for (const cost of [COSTS.city, COSTS.settlement]) {
       const miss: Resource[] = [];
       for (const r of RESOURCES) {
@@ -300,7 +300,7 @@ function aiMain(b: Board, s: GameState): Action {
     }
   }
   // 9) 垄断卡：对方手里某资源很多时
-  if (!s.devPlayed && me.devCards.includes('monopoly')) {
+  if (!s.devPlayed && me.devCards.includes('垄断')) {
     let bestR: Resource | null = null;
     let bestSum = 4;
     for (const r of RESOURCES) {

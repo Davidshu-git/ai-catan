@@ -80,7 +80,7 @@ function rollActions(s: GameState): LegalAction[] {
   ];
   // 掷骰前可打骑士卡
   const me = s.players[s.current];
-  if (!s.devPlayed && me.devCards.includes('knight')) {
+  if (!s.devPlayed && me.devCards.includes('骑士')) {
     out.push({
       id: 'play-knight',
       label: '掷骰前打出骑士卡（移动强盗 + 偷牌）',
@@ -96,7 +96,7 @@ function moveRobberActions(b: Board, s: GameState): LegalAction[] {
   const out: LegalAction[] = [];
   for (const h of b.hexes) {
     if (h.id === s.robber) continue;
-    const tag = h.terrain === 'desert' ? '沙漠' : `${h.number ?? '?'} 号 ${h.terrain}`;
+    const tag = h.terrain === '沙漠' ? '沙漠' : `${h.number ?? '?'} 号 ${h.terrain}`;
     out.push({
       id: `move-robber-h${h.id}`,
       label: `把强盗移到地块 ${tag}`,
@@ -172,21 +172,21 @@ function mainActions(b: Board, s: GameState): LegalAction[] {
   }
   // 打发展卡（一回合限一张）
   if (!s.devPlayed) {
-    if (me.devCards.includes('knight')) {
+    if (me.devCards.includes('骑士')) {
       out.push({
         id: 'play-knight',
-        label: `打出 ${DEV_LABEL.knight} 卡（移动强盗+偷牌）`,
+        label: `打出 ${DEV_LABEL.骑士} 卡（移动强盗+偷牌）`,
         action: { type: 'PLAY_KNIGHT' },
       });
     }
-    if (me.devCards.includes('roadBuilding')) {
+    if (me.devCards.includes('修路')) {
       out.push({
         id: 'play-road-building',
-        label: `打出 ${DEV_LABEL.roadBuilding} 卡（免费 2 条路）`,
+        label: `打出 ${DEV_LABEL.修路} 卡（免费 2 条路）`,
         action: { type: 'PLAY_ROAD_BUILDING' },
       });
     }
-    if (me.devCards.includes('yearOfPlenty')) {
+    if (me.devCards.includes('丰收')) {
       // 无序对（含重复）：5*(5+1)/2 = 15 条
       for (let i = 0; i < RESOURCES.length; i++) {
         for (let j = i; j < RESOURCES.length; j++) {
@@ -194,17 +194,17 @@ function mainActions(b: Board, s: GameState): LegalAction[] {
           const r2 = RESOURCES[j];
           out.push({
             id: `yop-${r1}-${r2}`,
-            label: `打出 ${DEV_LABEL.yearOfPlenty}：拿 ${RESOURCE_LABEL[r1]} + ${RESOURCE_LABEL[r2]}`,
+            label: `打出 ${DEV_LABEL.丰收}：拿 ${RESOURCE_LABEL[r1]} + ${RESOURCE_LABEL[r2]}`,
             action: { type: 'PLAY_YEAR_OF_PLENTY', r1, r2 },
           });
         }
       }
     }
-    if (me.devCards.includes('monopoly')) {
+    if (me.devCards.includes('垄断')) {
       for (const r of RESOURCES) {
         out.push({
           id: `monopoly-${r}`,
-          label: `打出 ${DEV_LABEL.monopoly}：抢光所有人的 ${RESOURCE_LABEL[r]}`,
+          label: `打出 ${DEV_LABEL.垄断}：抢光所有人的 ${RESOURCE_LABEL[r]}`,
           action: { type: 'PLAY_MONOPOLY', r },
         });
       }

@@ -153,7 +153,7 @@ export function reduce(b: Board, prev: GameState, a: Action): GameState {
         const got: Partial<ResMap> = {};
         for (const hid of b.vertices[a.v].hexes) {
           const h = b.hexes[hid];
-          if (h.terrain === 'desert') continue;
+          if (h.terrain === '沙漠') continue;
           const r = h.terrain as Resource;
           me.resources[r]++;
           s.bank[r]--;
@@ -301,7 +301,7 @@ export function reduce(b: Board, prev: GameState, a: Action): GameState {
       if (!canAfford(me, COSTS.dev)) break;
       spend(s, s.current, COSTS.dev);
       const card = s.devDeck.pop()!;
-      if (card === 'victory') {
+      if (card === '胜利点') {
         me.vpCards++;
         log(s, `${me.name} 购买了一张发展卡`);
         checkVictory(s, s.current);
@@ -316,7 +316,7 @@ export function reduce(b: Board, prev: GameState, a: Action): GameState {
     case 'PLAY_KNIGHT': {
       if (s.phase !== 'main' && s.phase !== 'roll') break;
       if (s.devPlayed) break;
-      const i = me.devCards.indexOf('knight');
+      const i = me.devCards.indexOf('骑士');
       if (i < 0) break;
       me.devCards.splice(i, 1);
       me.knightsPlayed++;
@@ -331,7 +331,7 @@ export function reduce(b: Board, prev: GameState, a: Action): GameState {
     }
     case 'PLAY_ROAD_BUILDING': {
       if (s.phase !== 'main' || s.devPlayed) break;
-      const i = me.devCards.indexOf('roadBuilding');
+      const i = me.devCards.indexOf('修路');
       if (i < 0) break;
       me.devCards.splice(i, 1);
       s.devPlayed = true;
@@ -341,7 +341,7 @@ export function reduce(b: Board, prev: GameState, a: Action): GameState {
     }
     case 'PLAY_YEAR_OF_PLENTY': {
       if (s.phase !== 'main' || s.devPlayed) break;
-      const i = me.devCards.indexOf('yearOfPlenty');
+      const i = me.devCards.indexOf('丰收');
       if (i < 0) break;
       me.devCards.splice(i, 1);
       s.devPlayed = true;
@@ -356,7 +356,7 @@ export function reduce(b: Board, prev: GameState, a: Action): GameState {
     }
     case 'PLAY_MONOPOLY': {
       if (s.phase !== 'main' || s.devPlayed) break;
-      const i = me.devCards.indexOf('monopoly');
+      const i = me.devCards.indexOf('垄断');
       if (i < 0) break;
       me.devCards.splice(i, 1);
       s.devPlayed = true;

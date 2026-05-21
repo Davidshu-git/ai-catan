@@ -26,7 +26,7 @@ export interface AgentPromptContext {
 
 /** 单条合法动作：稳定 ID + 中文摘要 + 真正派发的 Action */
 export interface LegalAction {
-  /** 稳定的可读 ID，如 build-road-e17 / end-turn / yop-wood-brick */
+  /** 稳定的可读 ID，如 build-road-e17 / end-turn / yop-木-砖 */
   id: string;
   /** 给 LLM 输入与前端展示用的中文摘要 */
   label: string;

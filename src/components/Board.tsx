@@ -36,7 +36,7 @@ interface Props {
 }
 
 const PORT_SHORT: Record<string, string> = {
-  wood: '木', brick: '砖', sheep: '羊', wheat: '麦', ore: '矿', any: '3:1',
+  木: '木', 砖: '砖', 羊: '羊', 麦: '麦', 矿: '矿', 通用: '3:1',
 };
 
 function shade(hex: string, f: number): string {
@@ -56,7 +56,7 @@ function Motif({ h }: { h: Hex }) {
   const y = h.cy;
   const art = TERRAIN_ART[h.terrain];
   switch (h.terrain) {
-    case 'wood': {
+    case '木': {
       const tree = (tx: number, ty: number, s: number) => (
         <g key={`${tx},${ty}`}>
           <path d={`M ${tx - 2 * s} ${ty + 13 * s} C ${tx - 5 * s} ${ty + 2 * s} ${tx + 5 * s} ${ty - 8 * s} ${tx + 1 * s} ${ty - 22 * s}`} stroke="#3a2318" strokeWidth={4 * s} fill="none" strokeLinecap="round" />
@@ -72,7 +72,7 @@ function Motif({ h }: { h: Hex }) {
         </g>
       );
     }
-    case 'brick': {
+    case '砖': {
       return (
         <g opacity={0.9}>
           <path d={`M ${x - 31} ${y + 15} C ${x - 19} ${y - 19} ${x + 12} ${y - 23} ${x + 31} ${y + 13} Z`} fill={art.light} stroke={INK} strokeWidth={2} />
@@ -85,7 +85,7 @@ function Motif({ h }: { h: Hex }) {
         </g>
       );
     }
-    case 'sheep': {
+    case '羊': {
       const sheep = (sx: number, sy: number, s: number) => (
         <g key={`${sx},${sy}`}>
           <path d={`M ${sx - 13 * s} ${sy} C ${sx - 13 * s} ${sy - 11 * s} ${sx + 12 * s} ${sy - 12 * s} ${sx + 15 * s} ${sy - 1 * s} C ${sx + 20 * s} ${sy + 10 * s} ${sx - 9 * s} ${sy + 14 * s} ${sx - 13 * s} ${sy} Z`} fill="#d8d3c4" stroke={INK} strokeWidth={1.6} />
@@ -101,7 +101,7 @@ function Motif({ h }: { h: Hex }) {
         </g>
       );
     }
-    case 'wheat': {
+    case '麦': {
       const stalk = (sx: number) => (
         <g key={sx} stroke={art.dark} strokeWidth={2}>
           <line x1={sx} y1={y + 16} x2={sx} y2={y - 14} />
@@ -122,7 +122,7 @@ function Motif({ h }: { h: Hex }) {
         </g>
       );
     }
-    case 'ore': {
+    case '矿': {
       return (
         <g opacity={0.92}>
           <polygon points={`${x - 26},${y + 17} ${x - 7},${y - 24} ${x + 9},${y + 18}`} fill={art.dark} stroke={INK} strokeWidth={2} strokeLinejoin="round" />
@@ -132,7 +132,7 @@ function Motif({ h }: { h: Hex }) {
         </g>
       );
     }
-    case 'desert': {
+    case '沙漠': {
       return (
         <g opacity={0.85}>
           <path d={`M ${x - 30} ${y + 17} Q ${x - 11} ${y + 2} ${x + 5} ${y + 12} T ${x + 31} ${y + 10}`} stroke={art.dark} strokeWidth={3} fill="none" strokeLinecap="round" />

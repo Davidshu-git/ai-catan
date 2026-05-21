@@ -2,20 +2,20 @@
 // 卡坦岛 类型定义
 // ============================================================
 
-export type Resource = 'wood' | 'brick' | 'sheep' | 'wheat' | 'ore';
-export const RESOURCES: Resource[] = ['wood', 'brick', 'sheep', 'wheat', 'ore'];
+export type Resource = '木' | '砖' | '羊' | '麦' | '矿';
+export const RESOURCES: Resource[] = ['木', '砖', '羊', '麦', '矿'];
 
-export type Terrain = Resource | 'desert';
+export type Terrain = Resource | '沙漠';
 
-export type DevCard = 'knight' | 'victory' | 'roadBuilding' | 'yearOfPlenty' | 'monopoly';
+export type DevCard = '骑士' | '胜利点' | '修路' | '丰收' | '垄断';
 
-/** 港口类型：某资源 2:1，或 'any' 表示通用 3:1 */
-export type Port = Resource | 'any';
+/** 港口类型：某资源 2:1，或 '通用' 表示通用 3:1 */
+export type Port = Resource | '通用';
 
 export type ResMap = Record<Resource, number>;
 
 export function emptyRes(): ResMap {
-  return { wood: 0, brick: 0, sheep: 0, wheat: 0, ore: 0 };
+  return { 木: 0, 砖: 0, 羊: 0, 麦: 0, 矿: 0 };
 }
 
 // ---- 静态棋盘（生成后不再变化） ----
@@ -155,46 +155,46 @@ export interface FullGame {
 // ---- 建造成本 ----
 
 export const COSTS = {
-  road: { wood: 1, brick: 1 } as Partial<ResMap>,
-  settlement: { wood: 1, brick: 1, sheep: 1, wheat: 1 } as Partial<ResMap>,
-  city: { wheat: 2, ore: 3 } as Partial<ResMap>,
-  dev: { sheep: 1, wheat: 1, ore: 1 } as Partial<ResMap>,
+  road: { 木: 1, 砖: 1 } as Partial<ResMap>,
+  settlement: { 木: 1, 砖: 1, 羊: 1, 麦: 1 } as Partial<ResMap>,
+  city: { 麦: 2, 矿: 3 } as Partial<ResMap>,
+  dev: { 羊: 1, 麦: 1, 矿: 1 } as Partial<ResMap>,
 };
 
 export const PIECE_LIMIT = { settlement: 5, city: 4, road: 15 };
 export const VICTORY_POINTS = 10;
 
 export const RESOURCE_LABEL: Record<Resource, string> = {
-  wood: '木材',
-  brick: '砖',
-  sheep: '羊',
-  wheat: '麦',
-  ore: '矿',
+  木: '木',
+  砖: '砖',
+  羊: '羊',
+  麦: '麦',
+  矿: '矿',
 };
 
 export const TERRAIN_COLOR: Record<Terrain, string> = {
-  wood: '#3f5f3e',
-  brick: '#874638',
-  sheep: '#7a8655',
-  wheat: '#b59645',
-  ore: '#5d6370',
-  desert: '#bca77a',
+  木: '#3f5f3e',
+  砖: '#874638',
+  羊: '#7a8655',
+  麦: '#b59645',
+  矿: '#5d6370',
+  沙漠: '#bca77a',
 };
 
 export const RESOURCE_COLOR: Record<Resource, string> = {
-  wood: '#3f5f3e',
-  brick: '#874638',
-  sheep: '#7a8655',
-  wheat: '#b59645',
-  ore: '#5d6370',
+  木: '#3f5f3e',
+  砖: '#874638',
+  羊: '#7a8655',
+  麦: '#b59645',
+  矿: '#5d6370',
 };
 
 export const DEV_LABEL: Record<DevCard, string> = {
-  knight: '骑士',
-  victory: '胜利点',
-  roadBuilding: '修路',
-  yearOfPlenty: '丰收',
-  monopoly: '垄断',
+  骑士: '骑士',
+  胜利点: '胜利点',
+  修路: '修路',
+  丰收: '丰收',
+  垄断: '垄断',
 };
 
 /** 数字标记的概率点数（出现概率，2/12=1 … 6/8=5） */

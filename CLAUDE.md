@@ -102,6 +102,22 @@ docker-compose.yml     ← 两个服务：catan-server（后端 tsx watch）+ ca
 
 修法：把 hook 全部上移；若内部要访问 `game` 字段，用可空表达式（`game?.state.phase`）并在 hook 内部判空。**改 App.tsx 时如果新加了 hook 或挪了 early return，肉眼检查一遍这条规则**——typecheck 不会捕获它。
 
+### 资源 / 地形 / 发展卡命名约定
+
+**ID 全部是单字中文**（2026-05-21 起），既是 TS 字面量类型成员，也是对象 key，也是序列化给 LLM 的 JSON 字段名——一份枚举走通前后端 + LLM。
+
+- `Resource = '木' | '砖' | '羊' | '麦' | '矿'`
+- `Terrain = Resource | '沙漠'`
+- `Port = Resource | '通用'`（`'通用'` = 3:1 港口）
+- `DevCard = '骑士' | '胜利点' | '修路' | '丰收' | '垄断'`
+
+新增 Provider / prompt / 持久化层时**不要把这些翻译回英文**。源头就在 `shared/types.ts`，其余地方一律消费它。
+
+例外：
+- **贴图路径** `/assets/terrain-wood.png` 等仍是英文文件名（不重打包），`TERRAIN_TILE_ASSETS` 做中→英映射。
+- **actionId 前缀**与枚举解耦：`play-knight` / `play-road-building` / `monopoly-` / `yop-` / `bank-` 是稳定字符串，mockProvider 按这些前缀匹配；资源后缀部分会跟随枚举变成中文（`monopoly-木` / `yop-木-砖` / `bank-木-to-砖`）。
+- `RESOURCE_LABEL` / `DEV_LABEL` 现为身份映射，保留作为 ID↔显示文本的单点扩展位。
+
 ### 不变量与契约
 
 **状态机仍然是纯函数。** `reduce(board, state, action)` 在 `shared/reducer.ts`，用 `structuredClone` 复制旧状态、返回新状态，从不就地修改。**非法动作静默 no-op（直接 `break`，不抛异常）**——这是被 AI 和 UI 依赖的契约，不要为非法动作加 throw。后端的 `applyAction` 直接信任 reducer 的这层保护。

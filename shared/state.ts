@@ -28,17 +28,17 @@ function shuffle<T>(arr: T[]): T[] {
 
 function makeDevDeck(): DevCard[] {
   return shuffle([
-    ...Array<DevCard>(14).fill('knight'),
-    ...Array<DevCard>(5).fill('victory'),
-    ...Array<DevCard>(2).fill('roadBuilding'),
-    ...Array<DevCard>(2).fill('yearOfPlenty'),
-    ...Array<DevCard>(2).fill('monopoly'),
+    ...Array<DevCard>(14).fill('骑士'),
+    ...Array<DevCard>(5).fill('胜利点'),
+    ...Array<DevCard>(2).fill('修路'),
+    ...Array<DevCard>(2).fill('丰收'),
+    ...Array<DevCard>(2).fill('垄断'),
   ]);
 }
 
 export function createGame(): FullGame {
   const board = generateBoard();
-  const desert = board.hexes.find((h) => h.terrain === 'desert')!;
+  const desert = board.hexes.find((h) => h.terrain === '沙漠')!;
 
   const players: Player[] = PLAYER_DEFS.map((d, i) => ({
     id: i,
@@ -68,7 +68,7 @@ export function createGame(): FullGame {
     buildings: {},
     roads: {},
     robber: desert.id,
-    bank: { wood: 19, brick: 19, sheep: 19, wheat: 19, ore: 19 },
+    bank: { 木: 19, 砖: 19, 羊: 19, 麦: 19, 矿: 19 },
     devDeck: makeDevDeck(),
     longestRoad: { player: null, len: 0 },
     largestArmy: { player: null, size: 0 },

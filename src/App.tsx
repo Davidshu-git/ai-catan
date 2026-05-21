@@ -476,11 +476,11 @@ function Phase({
     const t = setTimeout(() => setGlow([]), 650);
     return () => clearTimeout(t);
   }, [
-    me.resources.wood,
-    me.resources.brick,
-    me.resources.sheep,
-    me.resources.wheat,
-    me.resources.ore,
+    me.resources.木,
+    me.resources.砖,
+    me.resources.羊,
+    me.resources.麦,
+    me.resources.矿,
   ]);
 
   // 等待 AI
@@ -548,7 +548,7 @@ function Phase({
             <button className="btn primary" onClick={() => dispatch({ type: 'ROLL' })}>
               🎲 掷骰子
             </button>
-            {me.devCards.includes('knight') && !state.devPlayed && (
+            {me.devCards.includes('骑士') && !state.devPlayed && (
               <button className="btn" onClick={() => dispatch({ type: 'PLAY_KNIGHT' })}>
                 先打出骑士卡
               </button>
@@ -671,15 +671,15 @@ function MainActions({
 
 function DevCards({ state, dispatch }: { state: FullGame['state']; dispatch: (a: Action) => void }) {
   const me = state.players[HUMAN];
-  const [yop, setYop] = useState<[Resource, Resource]>(['wood', 'brick']);
-  const [mono, setMono] = useState<Resource>('wood');
+  const [yop, setYop] = useState<[Resource, Resource]>(['木', '砖']);
+  const [mono, setMono] = useState<Resource>('木');
 
   const counts: Record<DevCard, number> = {
-    knight: 0,
-    victory: 0,
-    roadBuilding: 0,
-    yearOfPlenty: 0,
-    monopoly: 0,
+    骑士: 0,
+    胜利点: 0,
+    修路: 0,
+    丰收: 0,
+    垄断: 0,
   };
   me.devCards.forEach((c) => counts[c]++);
   const newCount = me.newDevCards.length;
@@ -707,17 +707,17 @@ function DevCards({ state, dispatch }: { state: FullGame['state']; dispatch: (a:
         {newCount > 0 && <span className="tag">本回合新购 ×{newCount}（下回合可用）</span>}
       </div>
       <div className="btn-col">
-        <button className="btn" disabled={!can('knight')} onClick={() => dispatch({ type: 'PLAY_KNIGHT' })}>
+        <button className="btn" disabled={!can('骑士')} onClick={() => dispatch({ type: 'PLAY_KNIGHT' })}>
           打出骑士（移动强盗）
         </button>
         <button
           className="btn"
-          disabled={!can('roadBuilding')}
+          disabled={!can('修路')}
           onClick={() => dispatch({ type: 'PLAY_ROAD_BUILDING' })}
         >
           打出修路（免费 2 条路）
         </button>
-        {counts.yearOfPlenty > 0 && (
+        {counts.丰收 > 0 && (
           <div className="btn-col">
             <div className="tag-row">
               {([0, 1] as const).map((i) => (
@@ -738,7 +738,7 @@ function DevCards({ state, dispatch }: { state: FullGame['state']; dispatch: (a:
               ))}
               <button
                 className="btn"
-                disabled={!can('yearOfPlenty')}
+                disabled={!can('丰收')}
                 onClick={() =>
                   dispatch({ type: 'PLAY_YEAR_OF_PLENTY', r1: yop[0], r2: yop[1] })
                 }
@@ -748,7 +748,7 @@ function DevCards({ state, dispatch }: { state: FullGame['state']; dispatch: (a:
             </div>
           </div>
         )}
-        {counts.monopoly > 0 && (
+        {counts.垄断 > 0 && (
           <div className="tag-row">
             <select value={mono} onChange={(e) => setMono(e.target.value as Resource)}>
               {RESOURCES.map((r) => (
@@ -759,7 +759,7 @@ function DevCards({ state, dispatch }: { state: FullGame['state']; dispatch: (a:
             </select>
             <button
               className="btn"
-              disabled={!can('monopoly')}
+              disabled={!can('垄断')}
               onClick={() => dispatch({ type: 'PLAY_MONOPOLY', r: mono })}
             >
               打出垄断
@@ -776,8 +776,8 @@ function DevCards({ state, dispatch }: { state: FullGame['state']; dispatch: (a:
 
 function BankTrade({ game, dispatch }: { game: FullGame; dispatch: (a: Action) => void }) {
   const { board, state } = game;
-  const [give, setGive] = useState<Resource>('wood');
-  const [recv, setRecv] = useState<Resource>('ore');
+  const [give, setGive] = useState<Resource>('木');
+  const [recv, setRecv] = useState<Resource>('矿');
   const ratio = tradeRatio(board, state, HUMAN, give);
   const me = state.players[HUMAN];
   const ok = give !== recv && me.resources[give] >= ratio && state.bank[recv] > 0;

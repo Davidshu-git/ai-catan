@@ -89,7 +89,7 @@ export function tradeRatio(b: Board, s: GameState, player: number, give: Resourc
   for (const [vStr, bld] of Object.entries(s.buildings)) {
     if (bld.owner !== player) continue;
     const port = b.vertices[Number(vStr)].port;
-    if (port === 'any') ratio = Math.min(ratio, 3);
+    if (port === '通用') ratio = Math.min(ratio, 3);
     else if (port === give) ratio = Math.min(ratio, 2);
   }
   return ratio;
@@ -101,12 +101,12 @@ export function produceResources(b: Board, s: GameState, sum: number): Record<nu
   // 统计每个玩家每种资源的应得量
   const gains: Record<number, ResMap> = {};
   for (const p of s.players)
-    gains[p.id] = { wood: 0, brick: 0, sheep: 0, wheat: 0, ore: 0 };
+    gains[p.id] = { 木: 0, 砖: 0, 羊: 0, 麦: 0, 矿: 0 };
 
-  const demand: ResMap = { wood: 0, brick: 0, sheep: 0, wheat: 0, ore: 0 };
+  const demand: ResMap = { 木: 0, 砖: 0, 羊: 0, 麦: 0, 矿: 0 };
 
   for (const h of b.hexes) {
-    if (h.number !== sum || h.terrain === 'desert') continue;
+    if (h.number !== sum || h.terrain === '沙漠') continue;
     if (h.id === s.robber) continue;
     const res = h.terrain as Resource;
     for (const v of h.corners) {

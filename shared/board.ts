@@ -41,12 +41,12 @@ export function generateBoard(): Board {
 
   // 2) 地形与数字标记
   const terrainPool: Terrain[] = [
-    ...Array(4).fill('wood'),
-    ...Array(3).fill('brick'),
-    ...Array(4).fill('sheep'),
-    ...Array(4).fill('wheat'),
-    ...Array(3).fill('ore'),
-    'desert',
+    ...Array(4).fill('木'),
+    ...Array(3).fill('砖'),
+    ...Array(4).fill('羊'),
+    ...Array(4).fill('麦'),
+    ...Array(3).fill('矿'),
+    '沙漠',
   ];
   const terrains = shuffle(terrainPool);
   const numberPool = [2, 3, 3, 4, 4, 5, 5, 6, 6, 8, 8, 9, 9, 10, 10, 11, 11, 12];
@@ -138,7 +138,7 @@ export function generateBoard(): Board {
   }
 
   // 5) 数字标记：随机分配给非沙漠地块，尽量避免红色数字(6/8)相邻
-  const nonDesert = hexes.filter((h) => h.terrain !== 'desert');
+  const nonDesert = hexes.filter((h) => h.terrain !== '沙漠');
   // 地块相邻表
   const adj = new Map<number, number[]>();
   for (const h of hexes) adj.set(h.id, []);
@@ -199,15 +199,15 @@ export function generateBoard(): Board {
     .sort((a, b) => a.ang - b.ang);
 
   const portTypes: Port[] = shuffle([
-    'wood',
-    'brick',
-    'sheep',
-    'wheat',
-    'ore',
-    'any',
-    'any',
-    'any',
-    'any',
+    '木',
+    '砖',
+    '羊',
+    '麦',
+    '矿',
+    '通用',
+    '通用',
+    '通用',
+    '通用',
   ]);
   const step = perimeter.length / 9;
   for (let i = 0; i < 9; i++) {
