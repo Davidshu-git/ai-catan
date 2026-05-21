@@ -38,6 +38,14 @@ function pickFromMain(legalActions: LegalAction[]): LlmDecisionOutput | null {
   return null;
 }
 
+function withAgentVoice(input: LlmDecisionInput, out: LlmDecisionOutput): LlmDecisionOutput {
+  if (!input.agent) return out;
+  return {
+    ...out,
+    thought: `${input.agent.name}（独立记忆 ${input.agent.memory.length} 条）：${out.thought}`,
+  };
+}
+
 function pickRandom(legalActions: LegalAction[]): LlmDecisionOutput | null {
   if (legalActions.length === 0) return null;
   const la = legalActions[Math.floor(Math.random() * legalActions.length)];
@@ -54,13 +62,13 @@ export function createMockProvider(): AiDecisionProvider {
       const phase = input.view.phase;
       if (phase === 'main') {
         const out = pickFromMain(input.legalActions);
-        if (out) return out;
+        if (out) return withAgentVoice(input, out);
       }
       const out = pickRandom(input.legalActions);
       if (!out) {
         throw new Error(`mock provider: empty legalActions in phase ${phase}`);
       }
-      return out;
+      return withAgentVoice(input, out);
     },
   };
 }

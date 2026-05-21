@@ -20,6 +20,7 @@ import {
   canPlaceRoadSetup,
   canPlaceSettlementFree,
 } from '../../shared/rules';
+import type { Action } from '../../shared/reducer';
 
 export type BoardMode = 'road' | 'settlement' | 'city' | 'robber' | null;
 
@@ -30,6 +31,8 @@ interface Props {
   onVertex: (v: number) => void;
   onEdge: (e: number) => void;
   onHex: (h: number) => void;
+  highlightAction?: Action | null;
+  highlightPlayer?: number | null;
 }
 
 const PORT_SHORT: Record<string, string> = {
@@ -145,11 +148,33 @@ function Motif({ h }: { h: Hex }) {
   }
 }
 
-export function Board({ board, state, mode, onVertex, onEdge, onHex }: Props) {
+export function Board({
+  board,
+  state,
+  mode,
+  onVertex,
+  onEdge,
+  onHex,
+  highlightAction = null,
+  highlightPlayer = null,
+}: Props) {
   const isSetup = state.phase === 'setup1' || state.phase === 'setup2';
   const p = state.current;
   const bcx = board.width / 2;
   const bcy = board.height / 2;
+  const focusColor =
+    highlightPlayer != null ? state.players[highlightPlayer]?.color ?? PAPER : PAPER;
+  const focusEdge =
+    highlightAction?.type === 'BUILD_ROAD' || highlightAction?.type === 'PLACE_ROAD'
+      ? highlightAction.e
+      : null;
+  const focusVertex =
+    highlightAction?.type === 'BUILD_SETTLEMENT' ||
+    highlightAction?.type === 'BUILD_CITY' ||
+    highlightAction?.type === 'PLACE_SETTLEMENT'
+      ? highlightAction.v
+      : null;
+  const focusHex = highlightAction?.type === 'MOVE_ROBBER' ? highlightAction.hex : null;
 
   const vertexLegal = (v: number): boolean => {
     if (mode !== 'settlement' && mode !== 'city') return false;
@@ -205,6 +230,7 @@ export function Board({ board, state, mode, onVertex, onEdge, onHex }: Props) {
       {/* 地块 */}
       {board.hexes.map((h) => {
         const legal = hexLegal(h.id);
+        const focused = focusHex === h.id;
         const pts = h.poly.map((c) => `${c.x},${c.y}`).join(' ');
         const tileAsset = TERRAIN_TILE_ASSETS[h.terrain];
         return (
@@ -242,6 +268,16 @@ export function Board({ board, state, mode, onVertex, onEdge, onHex }: Props) {
               strokeLinejoin="round"
               filter="url(#paper-warp)"
             />
+            {focused && (
+              <polygon
+                className="ai-board-focus"
+                points={pts}
+                fill="none"
+                stroke={focusColor}
+                strokeWidth={7}
+                strokeLinejoin="round"
+              />
+            )}
             {h.number != null && (
               <g filter="url(#soft)">
                 <circle cx={h.cx} cy={h.cy} r={16} fill={PAPER} stroke={INK} strokeWidth={2.2} />
@@ -324,6 +360,7 @@ export function Board({ board, state, mode, onVertex, onEdge, onHex }: Props) {
       {board.edges.map((e) => {
         const road = state.roads[e.id];
         const legal = edgeLegal(e.id);
+        const focused = focusEdge === e.id;
         return (
           <g
             key={`edge-${e.id}`}
@@ -357,6 +394,18 @@ export function Board({ board, state, mode, onVertex, onEdge, onHex }: Props) {
                 strokeLinecap="round"
               />
             )}
+            {focused && (
+              <line
+                className="ai-board-focus"
+                x1={e.x1}
+                y1={e.y1}
+                x2={e.x2}
+                y2={e.y2}
+                stroke={focusColor}
+                strokeWidth={13}
+                strokeLinecap="round"
+              />
+            )}
           </g>
         );
       })}
@@ -365,6 +414,7 @@ export function Board({ board, state, mode, onVertex, onEdge, onHex }: Props) {
       {board.vertices.map((v) => {
         const bld = state.buildings[v.id];
         const legal = vertexLegal(v.id);
+        const focused = focusVertex === v.id;
         const col = bld ? state.players[bld.owner].color : '';
         return (
           <g
@@ -397,6 +447,17 @@ export function Board({ board, state, mode, onVertex, onEdge, onHex }: Props) {
                 fill="rgba(239,227,200,0.72)"
                 stroke={PAPER}
                 strokeWidth={2}
+              />
+            )}
+            {focused && (
+              <circle
+                className="ai-board-focus"
+                cx={v.x}
+                cy={v.y}
+                r={16}
+                fill="none"
+                stroke={focusColor}
+                strokeWidth={5}
               />
             )}
           </g>

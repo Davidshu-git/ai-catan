@@ -11,6 +11,30 @@
 - 短期支持规则 AI / Mock LLM / 真实 LLM 混用，避免一开始就把整套系统绑定到单一模型供应商。
 - 所有最终改变游戏状态的行为都必须落到现有 `Action`，并经由 `reduce(board, state, action)` 执行。
 
+## 当前实现状态（2026-05-20）
+
+第二阶段的主体能力已经落地：
+
+- `server/llm/` 已有 Provider 抽象、状态翻译器、合法动作目录、Maker-Checker、rule/mock/真实 LLM Provider。
+- `server/index.ts` 的 `scheduleAI()` 已改为走 `decideAiStep()`，并支持 `AI_PROVIDER=rule|mock|llm`。
+- `shared/protocol.ts` 已定义 `AiThoughtEvent` / `AiErrorEvent` / `AiControlState`，服务端已广播 `ai_thought` / `ai_error` / `ai_control_state`。
+- 前端 `src/App.tsx` 已有 AI 思考流面板和 AI 控制面板，可切换自动推进 / 暂停 / 单步推进。
+- 当前默认 `PLAYER_MODE=all-ai`：4 个席位都是 AI，前端作为观察和控制台；`PLAYER_MODE=human0` 可临时恢复 P0 人类旧模式。
+- `server/agents/` 已有每玩家独立 `AiAgentRuntime`：P0/P1/P2/P3 分别持有自己的性格、短期记忆、providerName 和 decisionCount。
+- LLM 输入已注入 agent 身份、性格和最近记忆；每次成功 `ai_thought` 会写回对应 agent 的 memory。
+- `sim.ts` 已改为走 controller 链路，能用 `AI_PROVIDER=rule` 或 `AI_PROVIDER=mock` 做压测。
+- 服务端已增加异步 LLM 决策保护：LLM 调用期间不并发启动第二个 AI 决策；若等待期间人类动作或 `new_game` 改变权威状态，旧决策会被丢弃并重新调度。
+- `AiThoughtEvent.action` 已携带通过 Maker-Checker 的真实动作，前端会短暂高亮对应道路、顶点或强盗地块。
+- AI 自动推进默认关闭，便于逐步观察；需要默认自动可设置 `AI_AUTOPLAY=1`。
+
+仍未实现的主要部分：
+
+- 第三阶段交易子系统：`server/trading/`、谈判状态、AI 群聊、结构化还价、最终 `TRADE_EXECUTE` 结算。
+- 第四阶段 Trade Chat 面板：前端尚未展示 AI 之间的交易谈判过程。
+- 人类参与谈判室：当前仍保留旧的人类 -> AI 报价与 AI -> 人类挂起交易两条路径。
+- 决策 trace 调试接口：当前只有 socket 事件 buffer，尚无专门的服务端最近 N 条决策查询接口或落盘。
+- 多房间、身份绑定、断线续盘仍未做。
+
 ## 第二阶段：LLM Controller
 
 目标：让后端能够把当前棋局翻译成大模型能理解的输入，并安全接收大模型返回的决策。
@@ -160,8 +184,11 @@ scheduleAI()
 
 | 方向 | 事件 | payload | 说明 |
 |---|---|---|---|
-| S -> C | `ai_thought` | `{player, phase, thought, actionId?, action?, status}` | AI 决策思考流 |
-| S -> C | `ai_error` | `{player, message, rawOutput?}` | LLM 输出非法、重试或 fallback 信息 |
+| S -> C | `ai_thought` | `{player, agentName, phase, thought, actionId?, action?, status}` | AI 决策思考流 |
+| S -> C | `ai_error` | `{player, agentName, message, rawOutput?}` | LLM 输出非法、重试或 fallback 信息 |
+| S -> C | `ai_control_state` | `{autoplay, queued, busy, canStep, provider, currentAgent}` | AI 控制面板状态 |
+| C -> S | `set_ai_autoplay` | `{autoplay}` + ack | 开关服务端 AI 自动推进 |
+| C -> S | `step_ai` | ack | 手动推进一个 AI 动作 |
 
 新增事件后同步更新 `AGENTS.md` / `CLAUDE.md` 内的 Socket 协议表。
 

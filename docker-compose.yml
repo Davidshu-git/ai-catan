@@ -12,6 +12,8 @@ services:
     environment:
       - PORT=3001
       - AI_PROVIDER=${AI_PROVIDER:-llm}
+      - PLAYER_MODE=${PLAYER_MODE:-all-ai}
+      - AI_AUTOPLAY=${AI_AUTOPLAY:-0}
       # AI_TICK_MS=460  默认；调慢便于观察 AI 思考流可设大一点
       # LLM_TIMEOUT_MS=30000  调 LLM 超时
       # LLM_TEMPERATURE=0.4   棋类决策不需要太发散

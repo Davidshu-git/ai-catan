@@ -20,6 +20,7 @@ import type {
   AiDecisionProvider,
   AiErrorEvent,
   AiThoughtEvent,
+  AgentPromptContext,
   LegalAction,
   LlmDecisionOutput,
   RetryFeedback,
@@ -50,6 +51,7 @@ export async function decideAiStep(
   board: Board,
   state: GameState,
   provider: AiDecisionProvider,
+  agent?: AgentPromptContext,
 ): Promise<StepOutcome> {
   if (state.phase === 'gameOver') return { kind: 'game-over' };
 
@@ -64,10 +66,12 @@ export async function decideAiStep(
       nextState,
       thought: {
         player: owner,
+        ...agentEventFields(agent),
         phase: state.phase,
         thought: '弃牌阶段由规则 AI 兜底（组合爆炸不喂 LLM）',
         actionId: `discard-fallback-p${owner}`,
         actionSummary: '自动弃牌',
+        action,
         provider: `rule(discard-fallback)+${provider.name}`,
         retries: 0,
         status: 'success',
@@ -83,7 +87,7 @@ export async function decideAiStep(
   const legalActions = buildActionCatalog(board, state);
   if (legalActions.length === 0) {
     // 极端：当前阶段没有动作枚举（不应出现），强制 END_TURN 兜底
-    return forceEndTurn(board, state, provider.name, 'EMPTY_CATALOG: 当前阶段无可选动作');
+    return forceEndTurn(board, state, provider.name, 'EMPTY_CATALOG: 当前阶段无可选动作', [], agent);
   }
 
   const view = buildPlayerView(board, state, state.current);
@@ -96,10 +100,11 @@ export async function decideAiStep(
     }));
     let output: LlmDecisionOutput;
     try {
-      output = await provider.decide({ view, legalActions, retryFeedback });
+      output = await provider.decide({ view, legalActions, agent, retryFeedback });
     } catch (err) {
       errors.push({
         player: state.current,
+        ...agentErrorFields(agent),
         phase: state.phase,
         provider: provider.name,
         message: `Provider 调用抛异常：${(err as Error).message}`,
@@ -115,10 +120,12 @@ export async function decideAiStep(
         nextState: result.nextState,
         thought: {
           player: state.current,
+          ...agentEventFields(agent),
           phase: state.phase,
           thought: output.thought,
           actionId: result.action.id,
           actionSummary: result.action.label,
+          action: result.action.action,
           provider: provider.name,
           retries: attempt,
           status: 'success',
@@ -129,6 +136,7 @@ export async function decideAiStep(
     }
     errors.push({
       player: state.current,
+      ...agentErrorFields(agent),
       phase: state.phase,
       provider: provider.name,
       message: result.message,
@@ -141,7 +149,7 @@ export async function decideAiStep(
   // Provider 反复失败：fallback 到规则 Provider
   const ruleProvider = createRuleProvider(board, state);
   try {
-    const ruleOutput = await ruleProvider.decide({ view, legalActions });
+    const ruleOutput = await ruleProvider.decide({ view, legalActions, agent });
     const ruleCheck = checkDecision(board, state, ruleOutput, legalActions);
     if (ruleCheck.ok) {
       return {
@@ -149,10 +157,12 @@ export async function decideAiStep(
         nextState: ruleCheck.nextState,
         thought: {
           player: state.current,
+          ...agentEventFields(agent),
           phase: state.phase,
           thought: `[Fallback] ${ruleOutput.thought}`,
           actionId: ruleCheck.action.id,
           actionSummary: ruleCheck.action.label,
+          action: ruleCheck.action.action,
           provider: `${provider.name}→rule`,
           retries: MAX_PROVIDER_RETRIES + 1,
           status: 'fallback',
@@ -165,7 +175,21 @@ export async function decideAiStep(
     /* fall through */
   }
 
-  return forceEndTurn(board, state, provider.name, 'Provider 与 rule fallback 均失败', errors);
+  return forceEndTurn(board, state, provider.name, 'Provider 与 rule fallback 均失败', errors, agent);
+}
+
+function agentEventFields(agent?: AgentPromptContext) {
+  return agent
+    ? {
+        agentName: agent.name,
+        agentPersonality: agent.personality,
+        agentMemorySize: agent.memory.length,
+      }
+    : {};
+}
+
+function agentErrorFields(agent?: AgentPromptContext) {
+  return agent ? { agentName: agent.name } : {};
 }
 
 function forceEndTurn(
@@ -174,6 +198,7 @@ function forceEndTurn(
   providerName: string,
   reason: string,
   errors: AiErrorEvent[] = [],
+  agent?: AgentPromptContext,
 ): StepOutcome {
   // 只在 main 阶段可强制 END_TURN；其他阶段强制结束没语义，让 scheduleAI 的指纹兜底处理
   const end: LegalAction = { id: 'end-turn', label: '结束回合', action: { type: 'END_TURN' } };
@@ -189,6 +214,7 @@ function forceEndTurn(
       ...errors,
       {
         player: state.current,
+        ...agentErrorFields(agent),
         phase: state.phase,
         provider: providerName,
         message: `强制 END_TURN：${reason}`,

@@ -14,6 +14,16 @@ import type { PlayerView } from './stateTranslator';
 // 协议层事件类型从 shared/protocol re-export，server 内部按惯例走 ./types
 export type { AiThoughtEvent, AiErrorEvent } from '../../shared/protocol';
 
+/** 每个 AI 玩家独立注入的 agent 上下文：性格 + 短期记忆 */
+export interface AgentPromptContext {
+  playerId: number;
+  name: string;
+  providerName: string;
+  personality: string;
+  memory: string[];
+  decisionCount: number;
+}
+
 /** 单条合法动作：稳定 ID + 中文摘要 + 真正派发的 Action */
 export interface LegalAction {
   /** 稳定的可读 ID，如 build-road-e17 / end-turn / yop-wood-brick */
@@ -34,6 +44,8 @@ export interface RetryFeedback {
 export interface LlmDecisionInput {
   view: PlayerView;
   legalActions: LegalAction[];
+  /** 当前玩家对应的独立 agent；rule/mock/llm 都可以读取 */
+  agent?: AgentPromptContext;
   /** 历史失败反馈（按重试顺序） */
   retryFeedback?: RetryFeedback[];
 }
@@ -50,4 +62,3 @@ export interface AiDecisionProvider {
   readonly name: string;
   decide(input: LlmDecisionInput): Promise<LlmDecisionOutput>;
 }
-

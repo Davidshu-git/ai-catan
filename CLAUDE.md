@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-卡坦岛（Catan）Web 联机版：1 人类 + 3 AI（短期是规则 AI，中期会接 LLM）。**前后端分离**：React + TypeScript + Vite 前端 + Node.js + socket.io 后端，共用 `shared/` 下的纯函数游戏内核；状态由后端持有并通过 WebSocket 推送给前端。源码与注释均为中文，沿用此约定。
+卡坦岛（Catan）Web 联机版：当前默认是 **4 个独立 AI Agent 观察局**（前端作为观察/控制台；后续再接人类玩家加入席位）。**前后端分离**：React + TypeScript + Vite 前端 + Node.js + socket.io 后端，共用 `shared/` 下的纯函数游戏内核；状态由后端持有并通过 WebSocket 推送给前端。源码与注释均为中文，沿用此约定。
 
 > 架构演进背景：本项目最初是纯前端单机版（reducer 跑在浏览器、AI 也在浏览器循环）。2026-05-20 完成前后端分离改造，把上帝视角状态与 AI 驱动搬到 Node 后端，**目的是为后续"AI 接入 LLM 调度"与"AI 决策思考流可视化"打地基**。`shared/` 这层被前后端同时引用，是这次重构的关键。
 
@@ -49,6 +49,7 @@ shared/                ← 纯函数游戏内核：前后端共用，不依赖 D
 
 server/                ← Node + socket.io 后端，持有上帝视角状态、驱动 AI、广播变更
   index.ts             socket.io 服务 + sessions Map（MVP 单房间）；scheduleAI 走 LLM controller
+  agents/              每个 AI 玩家独立 runtime（性格、短期记忆、provider 配置）
   smoke.ts             端到端冒烟脚本：连接→收 sync_state/ai_thought
   llm/                 LLM 决策层（Provider 抽象 + Maker-Checker）
     types.ts           AiDecisionProvider 接口、LegalAction、LlmDecisionInput/Output
@@ -77,15 +78,15 @@ docker-compose.yml     ← 两个服务：catan-server（后端）+ catan（前�
 ### 数据流（重要）
 
 ```
-人类点击 → App.dispatch(action) → socket.emit('dispatch', action)
+观察者点击 AI 控制 → set_ai_autoplay / step_ai
                                   ↓
-                  server: reduce(board, state, action) → io.emit('sync_state', game)
+                  server: scheduleAI(...) 按当前玩家取独立 Agent runtime
                                   ↓
-                  server: scheduleAI(...) ← 事件驱动 AI 循环
+                  Agent personality + memory + playerView + legalActions → Provider
                                   ↓
                           AI 该动 → reduce(...) → 再次 sync_state（每 ~460ms）
                                   ↓
-                          人类回合 / gameOver → AI 自然停
+                          手动暂停 / 非 AI 席位 / gameOver → AI 自然停
                                   ↓
                        前端 socket.on('sync_state', setGame)
 ```
@@ -108,7 +109,7 @@ docker-compose.yml     ← 两个服务：catan-server（后端）+ catan（前�
 
 **Phase 驱动一切。** `Phase` 类型（setup1/setup2/roll/discard/moveRobber/steal/main/gameOver）同时驱动 `aiNextAction` 和前端 UI 的分支。Setup 是子状态机：`setupOrder`（蛇形顺序）+ `setupIndex` + `setupStep`（settlement→road）。
 
-**AI 驱动循环在 `server/index.ts` 的 `scheduleAI()` → `decideAiStep()`（在 `server/llm/controller.ts`）。** 每次 dispatch 后调用；流程：①生成 legalActions（actionCatalog）+ playerView（stateTranslator）→ ②喂给 `AiDecisionProvider`（由 `AI_PROVIDER` 环境变量切换 rule/mock/llm）→ ③用 `actionChecker` 三层校验 → ④校验过则 apply 新状态 + 广播 `ai_thought`；不过则带反馈重试最多 2 次 → ⑤仍不过 fallback 到 ruleProvider；最终极端兜底强制 `END_TURN`。**discard 阶段不喂 Provider**：组合爆炸，直接走规则 AI 兜底。**含状态指纹防卡死兜底**：连续 8 次同指纹则强制 `END_TURN`（sim.ts 用同样指纹、阈值 600）。**改 AI 的铁律：`aiMain` 必须始终推进或最终 `END_TURN`，绝不能持续返回一个会被 reducer no-op 的动作。**
+**AI 驱动循环在 `server/index.ts` 的 `scheduleAI()` → `decideAiStep()`（在 `server/llm/controller.ts`）。** 当前默认 `PLAYER_MODE=all-ai`：server 创建新局后把 4 个席位都设为 AI，并在 `Session.agents` 里为 P0/P1/P2/P3 各建一个独立 `AiAgentRuntime`（性格、短期记忆、providerName、decisionCount）。流程：①按当前玩家取对应 agent → ②生成 legalActions（actionCatalog）+ playerView（stateTranslator）+ agent personality/memory → ③喂给 `AiDecisionProvider`（由 agent.providerName 初始化自 `AI_PROVIDER`，可按玩家拆分）→ ④用 `actionChecker` 三层校验 → ⑤校验过则 apply 新状态 + 广播 `ai_thought`，并把 thought/action 写回该 agent 的 memory；不过则带反馈重试最多 2 次 → ⑥仍不过 fallback 到 ruleProvider；最终极端兜底强制 `END_TURN`。**discard 阶段不喂 Provider**：组合爆炸，直接走规则 AI 兜底。**含状态指纹防卡死兜底**：连续 8 次同指纹则强制 `END_TURN`（sim.ts 用同样指纹、阈值 600）。**改 AI 的铁律：`aiMain` 必须始终推进或最终 `END_TURN`，绝不能持续返回一个会被 reducer no-op 的动作。**
 
 **Provider 抽象（重要）：**
 - `rule` Provider：包 `aiNextAction`，把动作 deep-equal 反查到 `legalActions` 中的 actionId。
@@ -131,6 +132,7 @@ docker-compose.yml     ← 两个服务：catan-server（后端）+ catan（前�
 ### 已知缺口（本轮**没做**，后期要做）
 
 - **玩家身份认证**：当前任意 socket 都能 `dispatch` 任意 action。reducer 按 `state.current` 归因，所以不能"代签其他玩家的回合"，但能干扰当前玩家。需要 player binding。
+- **人类加入席位**：当前默认 4 AI 观察局；需要 player binding 后再把某个 seat 从 AI 切成 human（临时可用 `PLAYER_MODE=human0` 恢复 P0 人类旧模式）。
 - **多房间 / 匹配**：sessions 是 Map 但只用 `'default'` 一个键。多人匹配需要房间列表 + 加入 / 离开协议。
 - **断线续盘 / 持久化**：server 重启状态丢失。需要 DB 或快照。
 - **LLM AI 接入**：架构留好 `aiNextAction` 入口；接入时不要改 reducer，要在 server 加 "AI 决策提供者" 抽象层（规则 AI / LLM AI 可切换）。
@@ -144,10 +146,13 @@ docker-compose.yml     ← 两个服务：catan-server（后端）+ catan（前�
 | C → S | `dispatch` | `Action` | 玩家动作；server reduce + 广播 + scheduleAI |
 | C → S | `propose_human_trade` | `{target, give, receive}` + ack | 人→AI 报价。ack 收 `{accepted: boolean}` |
 | C → S | `new_game` | —— | 清掉当前 session，重开一局，广播 |
-| S → C | `ai_thought` | `AiThoughtEvent` | 一次 AI 决策的思考流（player/phase/thought/actionId/provider/retries/status） |
-| S → C | `ai_error` | `AiErrorEvent` | Provider 输出非法 / 调用失败时广播；重试过程的错误也会发 |
+| C → S | `set_ai_autoplay` | `{autoplay: boolean}` + ack | 开关服务端 AI 自动连续推进；关闭时取消排队中的 AI 步骤，并让进行中的 LLM 决策返回后失效 |
+| C → S | `step_ai` | ack | 手动推进一个 AI 动作；仅在当前有 AI 可行动且未 busy/queued 时成功 |
+| S → C | `ai_thought` | `AiThoughtEvent` | 一次 AI 决策的思考流（player/agentName/phase/thought/actionId/action/provider/retries/status）；`action` 已通过 Maker-Checker，可用于前端棋盘高亮 |
+| S → C | `ai_error` | `AiErrorEvent` | Provider 输出非法 / 调用失败时广播；重试过程的错误也会发，含 agentName |
+| S → C | `ai_control_state` | `AiControlState` | AI 控制状态（autoplay/queued/busy/canStep/provider/currentAgent）；连接时与状态变化时广播 |
 
-`ai_thought` / `ai_error` 的 DTO 定义在 `shared/protocol.ts`，server 端有最近 60 条环形 buffer：新连接的客户端会在 `sync_state` 之后立即补拉历史事件。
+`ai_thought` / `ai_error` / `ai_control_state` 的 DTO 定义在 `shared/protocol.ts`，server 端有最近 60 条 AI 事件环形 buffer：新连接的客户端会在 `sync_state` 之后立即补拉历史事件。AI 自动推进默认关闭（`AI_AUTOPLAY=1` 可改默认开启），前端通过 AI 控制面板切换或单步推进。`PLAYER_MODE=human0` 可临时恢复 P0 人类 + 3 AI；默认 `all-ai`。
 
 新增事件时同步更新此表与 `server/index.ts` 的注释。
 

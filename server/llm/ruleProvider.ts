@@ -68,7 +68,8 @@ export function createRuleProvider(board: Board, state: GameState): AiDecisionPr
     name: 'rule',
     async decide(input: LlmDecisionInput): Promise<LlmDecisionOutput> {
       const out = decideWithRules(board, state, input.legalActions);
-      if (out) return out;
+      const prefix = input.agent ? `${input.agent.name} 按自身策略记忆决策：` : '';
+      if (out) return { ...out, thought: `${prefix}${out.thought}` };
       // 兜底：选 END_TURN 或第一个合法动作
       const end = input.legalActions.find((la) => la.id === 'end-turn');
       const fallback = end ?? input.legalActions[0];
@@ -76,7 +77,7 @@ export function createRuleProvider(board: Board, state: GameState): AiDecisionPr
         throw new Error('rule provider: no legal action available');
       }
       return {
-        thought: `规则 AI 兜底（无可选动作时取首项）：${fallback.label}`,
+        thought: `${prefix}规则 AI 兜底（无可选动作时取首项）：${fallback.label}`,
         actionId: fallback.id,
       };
     },

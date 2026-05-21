@@ -30,7 +30,8 @@ const SYSTEM_PROMPT = `你是卡坦岛策略助手，正在替一名 AI 玩家�
 2. 输出必须是严格 JSON：{"thought": "...", "actionId": "..."}
 3. thought 用中文，1-3 句话，说清为什么选这个
 4. 不要写规则解释、不要用代码块包裹、不要前后缀文字，只返回 JSON 本体
-5. 偏好：升级城市 > 建房屋 > 朝资源点修路 > 买发展卡 > END_TURN；银行兑换只在差 1 张关键资源时用`;
+5. 如果输入里有 agentProfile，你必须延续该 agent 的性格、偏好和记忆，但仍以当前合法动作列表为准
+6. 偏好：升级城市 > 建房屋 > 朝资源点修路 > 买发展卡 > END_TURN；银行兑换只在差 1 张关键资源时用`;
 
 interface AnthropicResp {
   content?: Array<{ type: string; text?: string }>;
@@ -65,6 +66,20 @@ function formatView(view: PlayerView): string {
 
 function buildUserMessage(input: LlmDecisionInput): string {
   const parts: string[] = [];
+  if (input.agent) {
+    parts.push('你的独立 agent 身份（JSON）：');
+    parts.push(
+      JSON.stringify({
+        playerId: input.agent.playerId,
+        name: input.agent.name,
+        providerName: input.agent.providerName,
+        personality: input.agent.personality,
+        decisionCount: input.agent.decisionCount,
+        memory: input.agent.memory,
+      }),
+    );
+    parts.push('');
+  }
   parts.push('当前局面（你的视角，JSON）：');
   parts.push(formatView(input.view));
   parts.push('');

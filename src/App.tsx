@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { io, type Socket } from 'socket.io-client';
 import { Board, type BoardMode } from './components/Board';
 import { robberCandidates, type Action } from '../shared/reducer';
-import type { AiErrorEvent, AiThoughtEvent } from '../shared/protocol';
+import type { AiControlState, AiErrorEvent, AiThoughtEvent } from '../shared/protocol';
 import {
   handSize,
   longestRoadLength,
@@ -137,7 +137,16 @@ type ThoughtLogItem =
   | { kind: 'thought'; data: AiThoughtEvent }
   | { kind: 'error'; data: AiErrorEvent };
 
+type AiBoardFocus = { player: number; action: Action; ts: number };
+
 const THOUGHT_LOG_MAX = 80;
+const DEFAULT_AI_CONTROL: AiControlState = {
+  autoplay: false,
+  queued: false,
+  busy: false,
+  canStep: false,
+  provider: 'unknown',
+};
 
 export function App() {
   // 初始 null：等待服务端 sync_state；AI 驱动循环全部在服务端
@@ -146,9 +155,26 @@ export function App() {
   const [mode, setMode] = useState<BoardMode>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [thoughtLog, setThoughtLog] = useState<ThoughtLogItem[]>([]);
+  const [aiFocus, setAiFocus] = useState<AiBoardFocus | null>(null);
+  const [aiControl, setAiControl] = useState<AiControlState>(DEFAULT_AI_CONTROL);
 
   const dispatch = useCallback((a: Action) => {
     socket.emit('dispatch', a);
+  }, []);
+
+  const setAiAutoplay = useCallback((autoplay: boolean) => {
+    socket.emit('set_ai_autoplay', { autoplay });
+  }, []);
+
+  const stepAi = useCallback(() => {
+    socket
+      .timeout(2000)
+      .emit('step_ai', (err: Error | null, res?: { ok: boolean; reason?: string }) => {
+        if (err || !res || !res.ok) {
+          setToast(res?.reason ?? 'AI 暂时无法推进');
+          setTimeout(() => setToast(null), 2200);
+        }
+      });
   }, []);
 
   const flash = useCallback((m: string) => {
@@ -165,19 +191,25 @@ export function App() {
         const next = [...arr, item];
         return next.length > THOUGHT_LOG_MAX ? next.slice(-THOUGHT_LOG_MAX) : next;
       });
-    const onThought = (ev: AiThoughtEvent) => append({ kind: 'thought', data: ev });
+    const onThought = (ev: AiThoughtEvent) => {
+      append({ kind: 'thought', data: ev });
+      if (ev.action) setAiFocus({ player: ev.player, action: ev.action, ts: ev.ts });
+    };
     const onError = (ev: AiErrorEvent) => append({ kind: 'error', data: ev });
+    const onAiControl = (ev: AiControlState) => setAiControl(ev);
     socket.on('connect', onConnect);
     socket.on('disconnect', onDisconnect);
     socket.on('sync_state', onSync);
     socket.on('ai_thought', onThought);
     socket.on('ai_error', onError);
+    socket.on('ai_control_state', onAiControl);
     return () => {
       socket.off('connect', onConnect);
       socket.off('disconnect', onDisconnect);
       socket.off('sync_state', onSync);
       socket.off('ai_thought', onThought);
       socket.off('ai_error', onError);
+      socket.off('ai_control_state', onAiControl);
     };
   }, []);
 
@@ -185,12 +217,20 @@ export function App() {
   useEffect(() => {
     if (game && game.state.turn === 0 && game.state.phase === 'setup1' && game.state.setupIndex === 0) {
       setThoughtLog([]);
+      setAiFocus(null);
     }
   }, [game?.state.turn, game?.state.phase, game?.state.setupIndex]);
 
+  // AI 动作高亮只短暂停留，避免遮挡后续人工操作。
+  useEffect(() => {
+    if (!aiFocus) return;
+    const t = setTimeout(() => setAiFocus(null), 1800);
+    return () => clearTimeout(t);
+  }, [aiFocus?.ts]);
+
   // ⚠️ 所有 hook 必须在 early return 之前调用（Rules of Hooks）
   const state = game?.state;
-  const isHumanTurn = state?.current === HUMAN;
+  const isHumanTurn = state ? state.players[state.current]?.isAI === false : false;
   const isSetup = state?.phase === 'setup1' || state?.phase === 'setup2';
   const boardMode: BoardMode = useMemo(() => {
     if (!state) return null;
@@ -251,6 +291,8 @@ export function App() {
             onVertex={onVertex}
             onEdge={onEdge}
             onHex={onHex}
+            highlightAction={aiFocus?.action ?? null}
+            highlightPlayer={aiFocus?.player ?? null}
           />
         </div>
       </div>
@@ -258,6 +300,12 @@ export function App() {
       <aside className="sidebar">
         <div className="sidebar-scroll">
           <Players game={game} />
+          <AiControls
+            control={aiControl}
+            connected={connected}
+            onAutoplay={setAiAutoplay}
+            onStep={stepAi}
+          />
           <Phase
             game={game}
             mode={mode}
@@ -292,6 +340,60 @@ export function App() {
   );
 }
 
+// ---------- AI 控制 ----------
+
+function AiControls({
+  control,
+  connected,
+  onAutoplay,
+  onStep,
+}: {
+  control: AiControlState;
+  connected: boolean;
+  onAutoplay: (autoplay: boolean) => void;
+  onStep: () => void;
+}) {
+  const waiting = control.queued || control.busy;
+  const stepDisabled = !connected || control.autoplay || waiting || !control.canStep;
+  const status = control.busy
+    ? '思考中'
+    : control.queued
+      ? '已排队'
+      : control.canStep
+        ? '可推进'
+        : '等待玩家';
+
+  return (
+    <div className="card">
+      <h2>AI 控制</h2>
+      <div className="ai-control-head">
+        <span className={`tag${control.autoplay ? ' tag-on' : ''}`}>
+          {control.autoplay ? '自动' : '手动'}
+        </span>
+        <span className="tag">{status}</span>
+        <span className="tag">{control.provider}</span>
+        {control.currentAgent && (
+          <span className="tag">
+            {control.currentAgent.name} · 记忆 {control.currentAgent.memorySize}
+          </span>
+        )}
+      </div>
+      <div className="btn-grid">
+        <button
+          className={`btn${control.autoplay ? '' : ' primary'}`}
+          disabled={!connected || waiting}
+          onClick={() => onAutoplay(!control.autoplay)}
+        >
+          {control.autoplay ? '暂停' : '自动推进'}
+        </button>
+        <button className="btn" disabled={stepDisabled} onClick={onStep}>
+          推进一步
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // ---------- 玩家面板 ----------
 
 function Players({ game }: { game: FullGame }) {
@@ -301,7 +403,7 @@ function Players({ game }: { game: FullGame }) {
       <h2>玩家</h2>
       <div className="players-grid">
         {state.players.map((pl) => {
-          const vp = pl.id === HUMAN ? totalVP(state, pl.id) : publicVP(state, pl.id);
+          const vp = pl.isAI ? publicVP(state, pl.id) : totalVP(state, pl.id);
           const lr = longestRoadLength(board, state, pl.id);
           return (
             <div
@@ -359,8 +461,9 @@ function Phase({
   flash: (m: string) => void;
 }) {
   const { board, state } = game;
-  const me = state.players[HUMAN];
-  const isHumanTurn = state.current === HUMAN;
+  const human = state.players.find((p) => !p.isAI) ?? null;
+  const me = human ?? state.players[HUMAN];
+  const isHumanTurn = state.players[state.current]?.isAI === false;
 
   // 资源增加时脉冲高亮
   const prevRes = useRef<ResMap>({ ...me.resources });
@@ -384,14 +487,14 @@ function Phase({
   const aiActing =
     !isHumanTurn &&
     state.phase !== 'gameOver' &&
-    !(state.phase === 'discard' && state.discardLeft[HUMAN] != null) &&
-    !(state.pendingTrade && state.pendingTrade.to === HUMAN);
+    !(human && state.phase === 'discard' && state.discardLeft[human.id] != null) &&
+    !(human && state.pendingTrade && state.pendingTrade.to === human.id);
 
   return (
     <>
       {/* 自己的资源 */}
       <div className="card">
-        <h2>我的资源</h2>
+        <h2>{human ? '我的资源' : `${me.name} 资源`}</h2>
         <div className="res-bar">
           {RESOURCES.map((r) => (
             <span key={r} className={`res-pill${glow.includes(r) ? ' gain' : ''}`}>
@@ -413,15 +516,19 @@ function Phase({
         </div>
       )}
 
-      {aiActing && <div className="hint">AI 正在行动中…</div>}
+      {aiActing && (
+        <div className="hint">
+          {human ? 'AI 正在行动中…' : `${state.players[state.current].name} 等待控制面板推进…`}
+        </div>
+      )}
 
       {/* 弃牌（玩家） */}
-      {state.phase === 'discard' && state.discardLeft[HUMAN] != null && (
+      {human && state.phase === 'discard' && state.discardLeft[human.id] != null && (
         <DiscardPanel state={state} dispatch={dispatch} />
       )}
 
       {/* AI 向我提议交易 */}
-      {state.pendingTrade && state.pendingTrade.to === HUMAN && (
+      {human && state.pendingTrade && state.pendingTrade.to === human.id && (
         <PendingTrade game={game} dispatch={dispatch} />
       )}
 
@@ -894,9 +1001,12 @@ function ThoughtLog({
                 <div key={`${t.ts}-${i}`} className={`thought-row${t.status === 'fallback' ? ' is-fallback' : ''}`}>
                   <div className="thought-head">
                     <span className="player-dot" style={{ background: p?.color }} />
-                    <span className="thought-who">{p?.name ?? `玩家${t.player}`}</span>
+                    <span className="thought-who">{t.agentName ?? p?.name ?? `玩家${t.player}`}</span>
                     <span className="thought-tag">{t.phase}</span>
                     <span className="thought-tag thought-tag-prov">{t.provider}</span>
+                    {t.agentMemorySize != null && (
+                      <span className="thought-tag">记忆 {t.agentMemorySize}</span>
+                    )}
                     {t.retries > 0 && (
                       <span className="thought-tag thought-tag-warn">重试 ×{t.retries}</span>
                     )}
@@ -911,7 +1021,7 @@ function ThoughtLog({
               <div key={`${e.ts}-${i}`} className="thought-row is-error">
                 <div className="thought-head">
                   <span className="player-dot" style={{ background: p?.color }} />
-                  <span className="thought-who">{p?.name ?? `玩家${e.player}`}</span>
+                  <span className="thought-who">{e.agentName ?? p?.name ?? `玩家${e.player}`}</span>
                   <span className="thought-tag">{e.phase}</span>
                   <span className="thought-tag thought-tag-prov">{e.provider}</span>
                   <span className="thought-tag thought-tag-err">错误</span>
