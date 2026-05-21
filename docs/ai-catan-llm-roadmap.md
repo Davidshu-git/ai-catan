@@ -26,11 +26,11 @@
 - 服务端已增加异步 LLM 决策保护：LLM 调用期间不并发启动第二个 AI 决策；若等待期间人类动作或 `new_game` 改变权威状态，旧决策会被丢弃并重新调度。
 - `AiThoughtEvent.action` 已携带通过 Maker-Checker 的真实动作，前端会短暂高亮对应道路、顶点或强盗地块。
 - AI 自动推进默认关闭，便于逐步观察；需要默认自动可设置 `AI_AUTOPLAY=1`。
+- AI-only 交易子系统第一版已落地：`server/trading/negotiationManager.ts` 在当前 AI 的 `main` 阶段受限发起谈判，广播 `trade_chat_started` / `trade_chat_message` / `trade_chat_closed`，成交前 dry-run `TRADE_EXECUTE`；前端侧栏已有“交易谈判”tab 记录报价、还价、成交 / 流局与限流计数。
 
 仍未实现的主要部分：
 
-- 第三阶段交易子系统：`server/trading/`、谈判状态、AI 群聊、结构化还价、最终 `TRADE_EXECUTE` 结算。
-- 第四阶段 Trade Chat 面板：前端尚未展示 AI 之间的交易谈判过程。
+- LLM 驱动的自由谈判 Provider：当前 AI 交易谈判是服务端启发式结构报价 / 接受 / 还价，还不是把完整谈判交给 LLM 生成。
 - 人类参与谈判室：当前仍保留旧的人类 -> AI 报价与 AI -> 人类挂起交易两条路径。
 - 决策 trace 调试接口：当前只有 socket 事件 buffer，尚无专门的服务端最近 N 条决策查询接口或落盘。
 - 多房间、身份绑定、断线续盘仍未做。

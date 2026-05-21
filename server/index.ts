@@ -7,10 +7,11 @@
 //   3. AI 驱动循环：通过 AiDecisionProvider 抽象，rule/mock/llm 可切换
 //      事件驱动 + 状态指纹防卡死 + Maker-Checker 三层校验
 //   4. 人→AI 交易的服务端自动应答（搬自原 App.tsx 同步逻辑）
-//   5. 广播 ai_thought / ai_error 供前端做决策可视化
-//   6. 提供 AI 自动 / 暂停 / 单步推进控制事件，便于观察 LLM 决策
+//   5. AI-only 交易谈判编排与 trade_chat_* 可视化事件
+//   6. 广播 ai_thought / ai_error 供前端做决策可视化
+//   7. 提供 AI 自动 / 暂停 / 单步推进控制事件，便于观察 LLM 决策
 //
-// 不在本轮做：玩家身份认证、多房间匹配、断线续盘、持久化、真实 LLM 接入。
+// 不在本轮做：玩家身份认证、多房间匹配、断线续盘、持久化、人类加入谈判室。
 // ============================================================
 
 import { createServer } from 'http';
@@ -20,7 +21,12 @@ import { createGame } from '../shared/state';
 import { reduce, type Action } from '../shared/reducer';
 import { aiAcceptsTrade } from '../shared/ai';
 import { RESOURCES, type FullGame, type GameState, type ResMap } from '../shared/types';
-import type { AiControlState } from '../shared/protocol';
+import type {
+  AiControlState,
+  TradeChatClosedEvent,
+  TradeChatMessageEvent,
+  TradeChatStartedEvent,
+} from '../shared/protocol';
 
 import type { AiDecisionProvider, AiErrorEvent, AiThoughtEvent, AiTimingEvent } from './llm/types';
 import { createRuleProvider } from './llm/ruleProvider';
@@ -33,11 +39,18 @@ import {
   toAgentPromptContext,
   type AiAgentRuntime,
 } from './agents/types';
+import {
+  createAiTradeLedger,
+  maybeRunAiNegotiation,
+  type AiTradeLedger,
+  type TradeEventEntry,
+} from './trading/negotiationManager';
 
 const PORT = Number(process.env.PORT ?? 3001);
 const AI_TICK_MS = Number(process.env.AI_TICK_MS ?? 460); // 每步 AI 之间的节奏
 const STALL_LIMIT = 8; // 状态指纹连续重复阈值
 const AI_EVENT_BUFFER = 60; // 每房间缓存最近 N 条 AI 事件，用于断线后补拉
+const TRADE_EVENT_BUFFER = 80; // 每房间缓存最近 N 条交易谈判事件
 const DEFAULT_ROOM = 'default'; // MVP：单房间
 const AI_PROVIDER = (process.env.AI_PROVIDER ?? 'llm').toLowerCase(); // rule | mock | llm
 const DEFAULT_AI_AUTOPLAY = process.env.AI_AUTOPLAY === '1'; // 默认手动，便于观察 AI 单步决策
@@ -47,6 +60,11 @@ const PLAYER_MODE = (process.env.PLAYER_MODE ?? 'all-ai').toLowerCase(); // all-
 interface AiEventLogEntry {
   kind: 'thought' | 'error';
   data: AiThoughtEvent | AiErrorEvent;
+}
+
+interface TradeEventLogEntry {
+  kind: 'started' | 'message' | 'closed';
+  data: TradeChatStartedEvent | TradeChatMessageEvent | TradeChatClosedEvent;
 }
 
 interface Session {
@@ -65,8 +83,12 @@ interface Session {
   aiProvider: string;
   /** 每个 AI 席位独立 agent runtime（身份 / 性格 / 记忆 / provider） */
   agents: Record<number, AiAgentRuntime>;
+  /** 当前回合 AI 交易谈判限流账本 */
+  tradeLedger: AiTradeLedger;
   /** 环形 buffer：最近的 AI 决策事件，便于晚来的客户端补齐上下文 */
   aiEvents: AiEventLogEntry[];
+  /** 环形 buffer：最近的交易谈判事件，便于晚来的客户端补齐上下文 */
+  tradeEvents: TradeEventLogEntry[];
 }
 
 const sessions = new Map<string, Session>();
@@ -85,7 +107,9 @@ function getSession(roomId: string): Session {
       aiBusy: false,
       aiProvider: AI_PROVIDER,
       agents: createAgentRuntimes(game.state, AI_PROVIDER),
+      tradeLedger: createAiTradeLedger(),
       aiEvents: [],
+      tradeEvents: [],
     };
     sessions.set(roomId, s);
   }
@@ -189,6 +213,13 @@ function pushAiEvent(session: Session, entry: AiEventLogEntry) {
   }
 }
 
+function pushTradeEvent(session: Session, entry: TradeEventLogEntry) {
+  session.tradeEvents.push(entry);
+  if (session.tradeEvents.length > TRADE_EVENT_BUFFER) {
+    session.tradeEvents.splice(0, session.tradeEvents.length - TRADE_EVENT_BUFFER);
+  }
+}
+
 function emitThought(io: Server, roomId: string, session: Session, ev: AiThoughtEvent) {
   rememberThought(session, ev);
   pushAiEvent(session, { kind: 'thought', data: ev });
@@ -198,6 +229,21 @@ function emitThought(io: Server, roomId: string, session: Session, ev: AiThought
 function emitError(io: Server, roomId: string, session: Session, ev: AiErrorEvent) {
   pushAiEvent(session, { kind: 'error', data: ev });
   io.to(roomId).emit('ai_error', ev);
+}
+
+function emitTradeEvent(io: Server, roomId: string, session: Session, entry: TradeEventEntry) {
+  pushTradeEvent(session, entry);
+  const eventName =
+    entry.kind === 'started'
+      ? 'trade_chat_started'
+      : entry.kind === 'message'
+        ? 'trade_chat_message'
+        : 'trade_chat_closed';
+  io.to(roomId).emit(eventName, entry.data);
+}
+
+function emitTradeEvents(io: Server, roomId: string, session: Session, events: TradeEventEntry[]) {
+  for (const entry of events) emitTradeEvent(io, roomId, session, entry);
 }
 
 function rememberThought(session: Session, ev: AiThoughtEvent) {
@@ -308,6 +354,19 @@ function scheduleAI(
     }
 
     const startVersion = session.version;
+    const negotiation = maybeRunAiNegotiation(game.board, game.state, session.tradeLedger);
+    if (negotiation) {
+      emitTradeEvents(io, roomId, session, negotiation.events);
+      if (negotiation.nextState) {
+        session.game = { board: game.board, state: negotiation.nextState };
+        session.version++;
+        broadcastState(io, roomId);
+      }
+      emitAiControl(io, roomId, session);
+      if (session.aiAutoplay && !opts.singleStep) scheduleAI(io, roomId);
+      return;
+    }
+
     const agent = getDecisionAgent(session, game.state);
     const provider = buildProvider(
       agent?.providerName ?? session.aiProvider,
@@ -429,6 +488,16 @@ io.on('connection', (socket: Socket) => {
   socket.emit('ai_control_state', getAiControlState(session));
   for (const entry of session.aiEvents) {
     socket.emit(entry.kind === 'thought' ? 'ai_thought' : 'ai_error', entry.data);
+  }
+  for (const entry of session.tradeEvents) {
+    socket.emit(
+      entry.kind === 'started'
+        ? 'trade_chat_started'
+        : entry.kind === 'message'
+          ? 'trade_chat_message'
+          : 'trade_chat_closed',
+      entry.data,
+    );
   }
 
   // 玩家动作：直接喂给 reducer
@@ -553,7 +622,9 @@ io.on('connection', (socket: Socket) => {
     s.version++;
     s.stall = { sig: '', count: 0 };
     s.agents = createAgentRuntimes(s.game.state, s.aiProvider);
+    s.tradeLedger = createAiTradeLedger();
     s.aiEvents = [];
+    s.tradeEvents = [];
     broadcastState(io, DEFAULT_ROOM);
     emitAiControl(io, DEFAULT_ROOM, s);
     scheduleAI(io, DEFAULT_ROOM);

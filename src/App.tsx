@@ -8,6 +8,10 @@ import type {
   AiModelContextEvent,
   AiTimingEvent,
   AiThoughtEvent,
+  TradeChatClosedEvent,
+  TradeChatMessageEvent,
+  TradeChatStartedEvent,
+  TradeOfferEvent,
 } from '../shared/protocol';
 import {
   handSize,
@@ -164,6 +168,10 @@ function Stepper({
 type ThoughtLogItem =
   | { kind: 'thought'; data: AiThoughtEvent }
   | { kind: 'error'; data: AiErrorEvent };
+type TradeLogItem =
+  | { kind: 'started'; data: TradeChatStartedEvent }
+  | { kind: 'message'; data: TradeChatMessageEvent }
+  | { kind: 'closed'; data: TradeChatClosedEvent };
 
 type AiBoardFocus = { player: number; action: Action; ts: number };
 type AiStepTimer = {
@@ -173,9 +181,10 @@ type AiStepTimer = {
   lastMs: number | null;
   lastOk: boolean | null;
 };
-type SidebarEventTab = 'thoughts' | 'log';
+type SidebarEventTab = 'thoughts' | 'trades' | 'log';
 
 const THOUGHT_LOG_MAX = 80;
+const TRADE_LOG_MAX = 120;
 const DEFAULT_AI_CONTROL: AiControlState = {
   autoplay: false,
   queued: false,
@@ -219,6 +228,7 @@ export function App() {
   const [mode, setMode] = useState<BoardMode>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [thoughtLog, setThoughtLog] = useState<ThoughtLogItem[]>([]);
+  const [tradeLog, setTradeLog] = useState<TradeLogItem[]>([]);
   const [aiFocus, setAiFocus] = useState<AiBoardFocus | null>(null);
   const [aiControl, setAiControl] = useState<AiControlState>(DEFAULT_AI_CONTROL);
   const [aiStepTimer, setAiStepTimer] = useState<AiStepTimer>(EMPTY_AI_STEP_TIMER);
@@ -396,6 +406,11 @@ export function App() {
         const next = [...arr, item];
         return next.length > THOUGHT_LOG_MAX ? next.slice(-THOUGHT_LOG_MAX) : next;
       });
+    const appendTrade = (item: TradeLogItem) =>
+      setTradeLog((arr) => {
+        const next = [...arr, item];
+        return next.length > TRADE_LOG_MAX ? next.slice(-TRADE_LOG_MAX) : next;
+      });
     const onThought = (ev: AiThoughtEvent) => {
       append({ kind: 'thought', data: ev });
       if (ev.action) setAiFocus({ player: ev.player, action: ev.action, ts: ev.ts });
@@ -408,6 +423,12 @@ export function App() {
       }
     };
     const onError = (ev: AiErrorEvent) => append({ kind: 'error', data: ev });
+    const onTradeStarted = (ev: TradeChatStartedEvent) =>
+      appendTrade({ kind: 'started', data: ev });
+    const onTradeMessage = (ev: TradeChatMessageEvent) =>
+      appendTrade({ kind: 'message', data: ev });
+    const onTradeClosed = (ev: TradeChatClosedEvent) =>
+      appendTrade({ kind: 'closed', data: ev });
     const onAiControl = (ev: AiControlState) => {
       setAiControl(ev);
       const hasWork = ev.queued || ev.busy;
@@ -432,6 +453,9 @@ export function App() {
     socket.on('sync_state', onSync);
     socket.on('ai_thought', onThought);
     socket.on('ai_error', onError);
+    socket.on('trade_chat_started', onTradeStarted);
+    socket.on('trade_chat_message', onTradeMessage);
+    socket.on('trade_chat_closed', onTradeClosed);
     socket.on('ai_control_state', onAiControl);
     return () => {
       socket.off('connect', onConnect);
@@ -439,6 +463,9 @@ export function App() {
       socket.off('sync_state', onSync);
       socket.off('ai_thought', onThought);
       socket.off('ai_error', onError);
+      socket.off('trade_chat_started', onTradeStarted);
+      socket.off('trade_chat_message', onTradeMessage);
+      socket.off('trade_chat_closed', onTradeClosed);
       socket.off('ai_control_state', onAiControl);
     };
   }, [finishAiAutoTimer, finishAiStepTimer, startAiAutoTimer]);
@@ -447,6 +474,7 @@ export function App() {
   useEffect(() => {
     if (game && game.state.turn === 0 && game.state.phase === 'setup1' && game.state.setupIndex === 0) {
       setThoughtLog([]);
+      setTradeLog([]);
       setAiFocus(null);
       aiStepAckedRef.current = false;
       aiStepSawWorkRef.current = false;
@@ -575,6 +603,7 @@ export function App() {
           activeTab={sidebarEventTab}
           onTabChange={setSidebarEventTab}
           thoughtItems={thoughtLog}
+          tradeItems={tradeLog}
           players={state.players}
           state={state}
         />
@@ -1337,12 +1366,14 @@ function SidebarEventPanel({
   activeTab,
   onTabChange,
   thoughtItems,
+  tradeItems,
   players,
   state,
 }: {
   activeTab: SidebarEventTab;
   onTabChange: (tab: SidebarEventTab) => void;
   thoughtItems: ThoughtLogItem[];
+  tradeItems: TradeLogItem[];
   players: FullGame['state']['players'];
   state: FullGame['state'];
 }) {
@@ -1360,6 +1391,15 @@ function SidebarEventPanel({
         </button>
         <button
           type="button"
+          className={activeTab === 'trades' ? 'active' : ''}
+          role="tab"
+          aria-selected={activeTab === 'trades'}
+          onClick={() => onTabChange('trades')}
+        >
+          交易谈判
+        </button>
+        <button
+          type="button"
           className={activeTab === 'log' ? 'active' : ''}
           role="tab"
           aria-selected={activeTab === 'log'}
@@ -1369,9 +1409,13 @@ function SidebarEventPanel({
         </button>
       </div>
       <div className="sidebar-tab-body">
-        {activeTab === 'thoughts' ? (
+        {activeTab === 'thoughts' && (
           <ThoughtLogContent items={thoughtItems} players={players} />
-        ) : (
+        )}
+        {activeTab === 'trades' && (
+          <TradeLogContent items={tradeItems} players={players} />
+        )}
+        {activeTab === 'log' && (
           <LogContent state={state} />
         )}
       </div>
@@ -1452,6 +1496,197 @@ function ThoughtLogContent({
         </div>
       )}
     </>
+  );
+}
+
+// ---------- 交易谈判 ----------
+
+function decisionLabel(decision: TradeChatMessageEvent['decision']): string {
+  switch (decision) {
+    case 'PROPOSE':
+      return '报价';
+    case 'ACCEPT':
+      return '接受';
+    case 'REJECT':
+      return '拒绝';
+    case 'COUNTER_OFFER':
+      return '还价';
+    case 'SYSTEM':
+      return '系统';
+  }
+}
+
+function tradeStatusLabel(status: TradeChatClosedEvent['status']): string {
+  switch (status) {
+    case 'accepted':
+      return '成交';
+    case 'rejected':
+      return '流局';
+    case 'expired':
+      return '超时';
+    case 'invalid':
+      return '无效';
+  }
+}
+
+function playerLabel(players: FullGame['state']['players'], id: number | null): string {
+  if (id == null) return '所有参与者';
+  return players[id]?.name ?? `玩家${id}`;
+}
+
+function ResList({ res }: { res: ResMap }) {
+  const entries = RESOURCES.filter((r) => res[r] > 0);
+  if (entries.length === 0) return <span className="trade-res-empty">无</span>;
+  return (
+    <span className="trade-res-list">
+      {entries.map((r) => (
+        <span key={r} className="trade-res-pill" title={RESOURCE_LABEL[r]}>
+          <ResIcon r={r} size={11} />
+          <b>{res[r]}</b>
+        </span>
+      ))}
+    </span>
+  );
+}
+
+function TradeOfferLine({
+  offer,
+  players,
+}: {
+  offer: TradeOfferEvent;
+  players: FullGame['state']['players'];
+}) {
+  return (
+    <div className="trade-offer-line">
+      <div className="trade-route">
+        {playerLabel(players, offer.from)} → {playerLabel(players, offer.to)}
+      </div>
+      <div className="trade-ledger">
+        <span>给出</span>
+        <ResList res={offer.give} />
+        <span>换得</span>
+        <ResList res={offer.receive} />
+      </div>
+    </div>
+  );
+}
+
+function TradeLimitsLine({ limits }: { limits: TradeChatStartedEvent['limits'] }) {
+  return (
+    <div className="trade-limits">
+      <span>发言 {limits.messagesUsed}/{limits.messagesMax}</span>
+      <span>报价 {limits.offersUsed}/{limits.offersMax}</span>
+      <span>还价 {limits.counterOffersUsed}/{limits.counterOffersMax}</span>
+      <span>本回合 {limits.sessionsUsedByInitiator}/{limits.sessionsMaxPerTurn}</span>
+    </div>
+  );
+}
+
+function TradeLogContent({
+  items,
+  players,
+}: {
+  items: TradeLogItem[];
+  players: FullGame['state']['players'];
+}) {
+  const sessions = useMemo(() => {
+    const map = new Map<
+      string,
+      {
+        sessionId: string;
+        started?: TradeChatStartedEvent;
+        messages: TradeChatMessageEvent[];
+        closed?: TradeChatClosedEvent;
+        ts: number;
+      }
+    >();
+    for (const item of items) {
+      const sessionId = item.data.sessionId;
+      const session =
+        map.get(sessionId) ??
+        ({
+          sessionId,
+          messages: [],
+          ts: item.data.ts,
+        } as {
+          sessionId: string;
+          started?: TradeChatStartedEvent;
+          messages: TradeChatMessageEvent[];
+          closed?: TradeChatClosedEvent;
+          ts: number;
+        });
+      session.ts = Math.max(session.ts, item.data.ts);
+      if (item.kind === 'started') session.started = item.data;
+      else if (item.kind === 'message') session.messages.push(item.data);
+      else session.closed = item.data;
+      map.set(sessionId, session);
+    }
+    return [...map.values()].sort((a, b) => b.ts - a.ts).slice(0, 20);
+  }, [items]);
+
+  if (sessions.length === 0) {
+    return <p className="cost">等待 AI 发起交易…</p>;
+  }
+
+  return (
+    <div className="trade-log">
+      {sessions.map((session) => {
+        const started = session.started;
+        const closed = session.closed;
+        const statusClass = closed ? ` is-${closed.status}` : ' is-open';
+        const lastLimits =
+          closed?.limits ?? session.messages[session.messages.length - 1]?.limits ?? started?.limits;
+        return (
+          <div key={session.sessionId} className={`trade-session${statusClass}`}>
+            <div className="trade-session-head">
+              <span className="trade-session-title">
+                第 {started?.turn ?? closed?.turn ?? '?'} 回合
+              </span>
+              <span className="thought-tag thought-tag-prov">
+                {closed ? tradeStatusLabel(closed.status) : '进行中'}
+              </span>
+              {started && (
+                <span className="thought-tag">
+                  {playerLabel(players, started.initiator)}
+                </span>
+              )}
+            </div>
+            {started && (
+              <>
+                <div className="trade-participants">
+                  {started.participants.map((p) => playerLabel(players, p)).join(' / ')}
+                </div>
+                <TradeOfferLine offer={started.proposedTrade} players={players} />
+              </>
+            )}
+            <div className="trade-messages">
+              {session.messages.map((msg, idx) => (
+                <div
+                  key={`${msg.ts}-${idx}`}
+                  className={`trade-message is-${msg.decision.toLowerCase().replace('_', '-')}`}
+                >
+                  <div className="trade-message-head">
+                    <span className="player-dot" style={{ background: msg.speaker == null ? '#66513e' : players[msg.speaker]?.color }} />
+                    <b>{playerLabel(players, msg.speaker)}</b>
+                    <span>{decisionLabel(msg.decision)}</span>
+                  </div>
+                  <div className="trade-message-text">{msg.message}</div>
+                  {msg.offer && <TradeOfferLine offer={msg.offer} players={players} />}
+                </div>
+              ))}
+            </div>
+            {closed && (
+              <div className="trade-result">
+                <b>{tradeStatusLabel(closed.status)}</b>
+                <span>{closed.reason}</span>
+                {closed.finalTrade && <TradeOfferLine offer={closed.finalTrade} players={players} />}
+              </div>
+            )}
+            {lastLimits && <TradeLimitsLine limits={lastLimits} />}
+          </div>
+        );
+      })}
+    </div>
   );
 }
 

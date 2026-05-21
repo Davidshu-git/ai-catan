@@ -6,7 +6,7 @@
 // ============================================================
 
 import type { Action } from './reducer';
-import type { Phase } from './types';
+import type { Phase, ResMap } from './types';
 
 export interface AiModelContextEvent {
   /** 产生该输入快照的 Provider 名称 */
@@ -130,4 +130,70 @@ export interface AiControlState {
     provider: string;
     memorySize: number;
   };
+}
+
+export type TradeDecisionEvent =
+  | 'PROPOSE'
+  | 'ACCEPT'
+  | 'REJECT'
+  | 'COUNTER_OFFER'
+  | 'SYSTEM';
+
+export type TradeSessionStatus =
+  | 'accepted'
+  | 'rejected'
+  | 'expired'
+  | 'invalid';
+
+/** 交易谈判里的结构化报价；to=null 表示向所有参与 AI 广播的开放报价 */
+export interface TradeOfferEvent {
+  from: number;
+  to: number | null;
+  give: ResMap;
+  receive: ResMap;
+}
+
+export interface TradeLimitsEvent {
+  messagesUsed: number;
+  messagesMax: number;
+  offersUsed: number;
+  offersMax: number;
+  counterOffersUsed: number;
+  counterOffersMax: number;
+  repliesByPlayer: Record<number, number>;
+  repliesMaxPerPlayer: number;
+  sessionsUsedByInitiator: number;
+  sessionsMaxPerTurn: number;
+}
+
+export interface TradeChatStartedEvent {
+  sessionId: string;
+  turn: number;
+  phase: Phase;
+  initiator: number;
+  participants: number[];
+  proposedTrade: TradeOfferEvent;
+  limits: TradeLimitsEvent;
+  ts: number;
+}
+
+export interface TradeChatMessageEvent {
+  sessionId: string;
+  turn: number;
+  speaker: number | null;
+  decision: TradeDecisionEvent;
+  message: string;
+  offer?: TradeOfferEvent;
+  limits: TradeLimitsEvent;
+  ts: number;
+}
+
+export interface TradeChatClosedEvent {
+  sessionId: string;
+  turn: number;
+  status: TradeSessionStatus;
+  reason: string;
+  finalTrade?: TradeOfferEvent;
+  limits: TradeLimitsEvent;
+  ts: number;
 }
