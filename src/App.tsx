@@ -148,6 +148,19 @@ const DEFAULT_AI_CONTROL: AiControlState = {
   provider: 'unknown',
 };
 
+// 左右分隔条：侧栏宽度上下限与持久化
+const SIDEBAR_DEFAULT = 372;
+const SIDEBAR_MIN = 280;
+const SIDEBAR_MAX_RATIO = 0.7;
+const SIDEBAR_STORAGE_KEY = 'catan-sidebar-width';
+
+function readStoredSidebarWidth(): number {
+  if (typeof window === 'undefined') return SIDEBAR_DEFAULT;
+  const raw = window.localStorage.getItem(SIDEBAR_STORAGE_KEY);
+  const n = raw == null ? NaN : Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : SIDEBAR_DEFAULT;
+}
+
 export function App() {
   // 初始 null：等待服务端 sync_state；AI 驱动循环全部在服务端
   const [game, setGame] = useState<FullGame | null>(null);
@@ -157,6 +170,50 @@ export function App() {
   const [thoughtLog, setThoughtLog] = useState<ThoughtLogItem[]>([]);
   const [aiFocus, setAiFocus] = useState<AiBoardFocus | null>(null);
   const [aiControl, setAiControl] = useState<AiControlState>(DEFAULT_AI_CONTROL);
+  const [sidebarWidth, setSidebarWidth] = useState<number>(readStoredSidebarWidth);
+  const draggingRef = useRef(false);
+
+  // 防抖：拖拽时高频更新，停手 200ms 后才落盘
+  useEffect(() => {
+    const t = setTimeout(() => {
+      window.localStorage.setItem(SIDEBAR_STORAGE_KEY, String(Math.round(sidebarWidth)));
+    }, 200);
+    return () => clearTimeout(t);
+  }, [sidebarWidth]);
+
+  // 窗口缩小时把宽度夹回合法范围
+  useEffect(() => {
+    const onResize = () => {
+      const max = window.innerWidth * SIDEBAR_MAX_RATIO;
+      setSidebarWidth((w) => Math.max(SIDEBAR_MIN, Math.min(max, w)));
+    };
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+
+  const onSplitterDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    draggingRef.current = true;
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+    const onMove = (ev: PointerEvent) => {
+      if (!draggingRef.current) return;
+      const next = window.innerWidth - ev.clientX;
+      const max = window.innerWidth * SIDEBAR_MAX_RATIO;
+      setSidebarWidth(Math.max(SIDEBAR_MIN, Math.min(max, next)));
+    };
+    const onUp = () => {
+      draggingRef.current = false;
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+  }, []);
+
+  const resetSidebarWidth = useCallback(() => setSidebarWidth(SIDEBAR_DEFAULT), []);
 
   const dispatch = useCallback((a: Action) => {
     socket.emit('dispatch', a);
@@ -281,7 +338,10 @@ export function App() {
   };
 
   return (
-    <div className="app">
+    <div
+      className="app"
+      style={{ ['--sidebar-width' as string]: `${Math.round(sidebarWidth)}px` }}
+    >
       <div className="board-area">
         <div className="board-wrap">
           <Board
@@ -295,6 +355,17 @@ export function App() {
             highlightPlayer={aiFocus?.player ?? null}
           />
         </div>
+      </div>
+
+      <div
+        className="splitter"
+        role="separator"
+        aria-orientation="vertical"
+        title="拖拽调整左右占比（双击重置）"
+        onPointerDown={onSplitterDown}
+        onDoubleClick={resetSidebarWidth}
+      >
+        <span className="splitter-grip" aria-hidden="true" />
       </div>
 
       <aside className="sidebar">
