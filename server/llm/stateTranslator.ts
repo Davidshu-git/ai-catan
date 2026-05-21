@@ -24,6 +24,10 @@ export interface SelfPlayerView {
   id: number;
   name: string;
   resources: ResMap;
+  /** 自己当前手牌总数 */
+  handSize: number;
+  /** 若之后有人掷出 7，当前手牌数需要弃掉的数量；0 表示安全 */
+  discardOnSeven: number;
   /** 可用发展卡（不含本回合新购） */
   devCards: string[];
   /** 本回合新购、下回合可用 */
@@ -42,6 +46,8 @@ export interface OtherPlayerView {
   isAI: boolean;
   /** 手牌总张数（不暴露资源明细） */
   handSize: number;
+  /** 若之后有人掷出 7，该玩家按当前手牌数需要弃掉的数量 */
+  discardOnSeven: number;
   /** 发展卡总数（不暴露 victory 等具体类别） */
   devCardCount: number;
   knightsPlayed: number;
@@ -91,6 +97,7 @@ export interface PlayerView {
 
 export function buildPlayerView(b: Board, s: GameState, me: number): PlayerView {
   const self = s.players[me];
+  const selfHandSize = handSize(self);
 
   const settlements: Record<number, number[]> = {};
   const cities: Record<number, number[]> = {};
@@ -117,6 +124,8 @@ export function buildPlayerView(b: Board, s: GameState, me: number): PlayerView 
       id: me,
       name: self.name,
       resources: { ...self.resources },
+      handSize: selfHandSize,
+      discardOnSeven: selfHandSize > 7 ? Math.floor(selfHandSize / 2) : 0,
       devCards: [...self.devCards],
       newDevCards: [...self.newDevCards],
       knightsPlayed: self.knightsPlayed,
@@ -128,19 +137,23 @@ export function buildPlayerView(b: Board, s: GameState, me: number): PlayerView 
     },
     others: s.players
       .filter((p) => p.id !== me)
-      .map((p) => ({
-        id: p.id,
-        name: p.name,
-        isAI: p.isAI,
-        handSize: handSize(p),
-        devCardCount: p.devCards.length + p.newDevCards.length,
-        knightsPlayed: p.knightsPlayed,
-        publicVP: publicVP(s, p.id),
-        settlements: settlements[p.id] ?? [],
-        cities: cities[p.id] ?? [],
-        roads: roadsByOwner[p.id] ?? [],
-        longestRoadLen: longestRoadLength(b, s, p.id),
-      })),
+      .map((p) => {
+        const h = handSize(p);
+        return {
+          id: p.id,
+          name: p.name,
+          isAI: p.isAI,
+          handSize: h,
+          discardOnSeven: h > 7 ? Math.floor(h / 2) : 0,
+          devCardCount: p.devCards.length + p.newDevCards.length,
+          knightsPlayed: p.knightsPlayed,
+          publicVP: publicVP(s, p.id),
+          settlements: settlements[p.id] ?? [],
+          cities: cities[p.id] ?? [],
+          roads: roadsByOwner[p.id] ?? [],
+          longestRoadLen: longestRoadLength(b, s, p.id),
+        };
+      }),
     bank: { ...s.bank },
     robber: s.robber,
     hexes: b.hexes.map((h) => ({

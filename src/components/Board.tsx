@@ -2,7 +2,7 @@
 // SVG 棋盘渲染与交互（手绘哥特纸片风）
 // ============================================================
 
-import type { Board as BoardT, GameState, Hex } from '../../shared/types';
+import type { Board as BoardT, GameState, Hex, Port } from '../../shared/types';
 import { TERRAIN_COLOR, pips } from '../../shared/types';
 import {
   INK,
@@ -35,8 +35,12 @@ interface Props {
   highlightPlayer?: number | null;
 }
 
-const PORT_SHORT: Record<string, string> = {
-  木: '木', 砖: '砖', 羊: '羊', 麦: '麦', 矿: '矿', 通用: '3:1',
+const PORT_KIND: Record<Port, string> = {
+  木: '木', 砖: '砖', 羊: '羊', 麦: '麦', 矿: '矿', 通用: '通用',
+};
+
+const PORT_RATIO: Record<Port, string> = {
+  木: '2:1', 砖: '2:1', 羊: '2:1', 麦: '2:1', 矿: '2:1', 通用: '3:1',
 };
 
 function shade(hex: string, f: number): string {
@@ -363,16 +367,29 @@ export function Board({
               />
               <text
                 x={px}
-                y={py + 4}
+                y={py - 2}
                 textAnchor="middle"
-                fontSize={10}
+                fontSize={v.port === '通用' ? 7 : 7.6}
                 fontWeight={900}
                 fill={INK}
                 stroke={PAPER}
-                strokeWidth={0.9}
+                strokeWidth={0.55}
                 paintOrder="stroke"
               >
-                {PORT_SHORT[v.port!]}
+                {PORT_KIND[v.port!]}
+              </text>
+              <text
+                x={px}
+                y={py + 6.5}
+                textAnchor="middle"
+                fontSize={7}
+                fontWeight={900}
+                fill={INK}
+                stroke={PAPER}
+                strokeWidth={0.5}
+                paintOrder="stroke"
+              >
+                {PORT_RATIO[v.port!]}
               </text>
             </g>
           );

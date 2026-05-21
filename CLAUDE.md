@@ -113,6 +113,8 @@ docker-compose.yml     ← 两个服务：catan-server（后端 tsx watch）+ ca
 
 新增 Provider / prompt / 持久化层时**不要把这些翻译回英文**。源头就在 `shared/types.ts`，其余地方一律消费它。
 
+LLM prompt / hint 里的骰点概率权重统一叫**产出点**，不要再写英文 `pip`。示例：`麦8(5产出点)`、`总产出 12产出点`。产出点不是资源数量，而是骰子概率权重（6/8 最高）。
+
 例外：
 - **贴图路径** `/assets/terrain-wood.png` 等仍是英文文件名（不重打包），`TERRAIN_TILE_ASSETS` 做中→英映射。
 - **actionId 前缀**与枚举解耦：`play-knight` / `play-road-building` / `monopoly-` / `yop-` / `bank-` 是稳定字符串，mockProvider 按这些前缀匹配；资源后缀部分会跟随枚举变成中文（`monopoly-木` / `yop-木-砖` / `bank-木-to-砖`）。
@@ -133,6 +135,14 @@ docker-compose.yml     ← 两个服务：catan-server（后端 tsx watch）+ ca
 - `mock` Provider：按优先级从 legalActions 里挑，不接 LLM 也能跑通整条链路；用于压测和无 API 调试。
 - `llm` Provider：调 **MiniMax-M2.7** 的 Anthropic 兼容端点（`https://api.minimaxi.com/anthropic/v1/messages`），裸 fetch（不依赖 SDK 以避兼容性麻烦）。`AbortController` 控 30-45s 超时；失败/超时由 controller 重试 + fallback 到 rule。**缺 `MINIMAX_API_KEY` 时自动降级到 rule 并打 warn**，stack 不会因此挂。
 - LLM 不直接生成 `Action`，**永远是从 server 生成的 `legalActions` 里挑 `actionId`**。这是降低乱编坐标 / 破坏状态机风险的关键设计，新增 Provider 时不要绕过这条约束。
+
+**LLM 输入与诊断可视化（2026-05-21，提交 `f69c0c1`）。** `AiThoughtEvent` / `AiErrorEvent` 现在可携带 `modelContext` 与 `timing`：前端 `AI 思考流` 每条新事件下方会显示可折叠的“模型输入 / Provider 输入”和“时延”面板。真实 LLM 显示实际发送的 `system` + `user` prompt；rule/mock 显示结构化 provider input。`timing` 会拆出 queue / catalog / view / context / provider / checker / fallback / commit 等阶段，用来定位慢点。旧历史事件没有这些字段是正常的。
+
+**LLM 成本与规则提示。** `stateTranslator.ts` 的 `PlayerView` 包含 `costs`：道路=木1+砖1、房屋=木1+砖1+羊1+麦1、城市=麦2+矿3、发展卡=羊1+麦1+矿1；`llmProvider.ts` 的系统 prompt 也有同样的中文速查。建房/初始放房屋必须遵守距离规则：任何房屋或城市的相邻顶点都不能再建房屋；`legalActions` 已过滤违规顶点，`settlementHint` 会写“距离规则已满足：相邻顶点均无建筑”。
+
+**道路 hint 的关键语义。** `roadHint()` 不要把道路端点周边资源直接当收益。修路后端点常因距离规则无法建村，真正价值通常是从路端再修一条路后的“隔点候选”。当前实现会模拟修完候选路，再列出“修完即可建”和“隔点候选：经 vX 再修 eY 到 vZ→资源/产出点”。改道路评估时必须保留这个语义，避免 LLM 误判道路价值。
+
+**棋盘调试编号。** `Board.tsx` 现在在 SVG 顶层显示只读边/顶点编号：`e{id}` / `v{id}`，`pointerEvents="none"`，用于对照 LLM actionId、hint 和棋盘位置；不要让编号层影响点击命中。
 
 **`actionChecker.ts` 指纹的设计要点**：必须捕获仅靠"资源总数 / 建筑数"看不出的小变化——`devPlayed` / `freeRoads` / 每玩家的 `devCards.length` + `knightsPlayed` + `vpCards` / `longestRoad+largestArmy` 等都要在指纹里，否则像 PLAY_MONOPOLY（无人有该资源）、PLAY_ROAD_BUILDING、空 bank 的 PLAY_YEAR_OF_PLENTY 会被误判为 `NO_STATE_CHANGE`。改 `Action` 含义或新增字段时，记得同步更新 `fingerprint()`。
 
@@ -166,8 +176,8 @@ docker-compose.yml     ← 两个服务：catan-server（后端 tsx watch）+ ca
 | C → S | `set_ai_autoplay` | `{autoplay: boolean}` + ack | 开关服务端 AI 自动连续推进；关闭时取消排队中的 AI 步骤，并让进行中的 LLM 决策返回后失效 |
 | C → S | `set_ai_hint` | `{hint: boolean}` + ack | 切换是否在 LLM prompt 里塞空间动作 hint（A/B 实验用）；仅影响 llm provider，rule/mock 忽略；不作废进行中的决策 |
 | C → S | `step_ai` | ack | 手动推进一个 AI 动作；仅在当前有 AI 可行动且未 busy/queued 时成功 |
-| S → C | `ai_thought` | `AiThoughtEvent` | 一次 AI 决策的思考流（player/agentName/phase/thought/actionId/actionHint/action/provider/retries/status）；`action` 已通过 Maker-Checker，可用于前端棋盘高亮；`actionHint` 是该动作的语义化情报（仅空间动作有），前端思考流会同步显示 |
-| S → C | `ai_error` | `AiErrorEvent` | Provider 输出非法 / 调用失败时广播；重试过程的错误也会发，含 agentName |
+| S → C | `ai_thought` | `AiThoughtEvent` | 一次 AI 决策的思考流（player/agentName/phase/thought/actionId/actionHint/action/modelContext/timing/provider/retries/status）；`action` 已通过 Maker-Checker，可用于前端棋盘高亮；`actionHint` 是最终选中动作的语义化情报；`modelContext` 展示完整模型输入 / Provider 输入；`timing` 展示服务端调用链路耗时 |
+| S → C | `ai_error` | `AiErrorEvent` | Provider 输出非法 / 调用失败时广播；重试过程的错误也会发，含 agentName；错误事件也可带 `modelContext` 与 `timing` 方便分析失败输入和耗时 |
 | S → C | `ai_control_state` | `AiControlState` | AI 控制状态（autoplay/queued/busy/canStep/hintEnabled/provider/currentAgent）；连接时与状态变化时广播 |
 
 `ai_thought` / `ai_error` / `ai_control_state` 的 DTO 定义在 `shared/protocol.ts`，server 端有最近 60 条 AI 事件环形 buffer：新连接的客户端会在 `sync_state` 之后立即补拉历史事件。AI 自动推进默认关闭（`AI_AUTOPLAY=1` 可改默认开启），前端通过 AI 控制面板切换或单步推进。`PLAYER_MODE=human0` 可临时恢复 P0 人类 + 3 AI；默认 `all-ai`。
