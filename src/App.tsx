@@ -145,6 +145,7 @@ const DEFAULT_AI_CONTROL: AiControlState = {
   queued: false,
   busy: false,
   canStep: false,
+  hintEnabled: true,
   provider: 'unknown',
 };
 
@@ -221,6 +222,10 @@ export function App() {
 
   const setAiAutoplay = useCallback((autoplay: boolean) => {
     socket.emit('set_ai_autoplay', { autoplay });
+  }, []);
+
+  const setAiHint = useCallback((hint: boolean) => {
+    socket.emit('set_ai_hint', { hint });
   }, []);
 
   const stepAi = useCallback(() => {
@@ -376,6 +381,7 @@ export function App() {
             connected={connected}
             onAutoplay={setAiAutoplay}
             onStep={stepAi}
+            onToggleHint={setAiHint}
           />
           <Phase
             game={game}
@@ -418,11 +424,13 @@ function AiControls({
   connected,
   onAutoplay,
   onStep,
+  onToggleHint,
 }: {
   control: AiControlState;
   connected: boolean;
   onAutoplay: (autoplay: boolean) => void;
   onStep: () => void;
+  onToggleHint: (hint: boolean) => void;
 }) {
   const waiting = control.queued || control.busy;
   const stepDisabled = !connected || control.autoplay || waiting || !control.canStep;
@@ -443,6 +451,15 @@ function AiControls({
         </span>
         <span className="tag">{status}</span>
         <span className="tag">{control.provider}</span>
+        <button
+          type="button"
+          className={`tag tag-btn${control.hintEnabled ? ' tag-on' : ''}`}
+          disabled={!connected}
+          onClick={() => onToggleHint(!control.hintEnabled)}
+          title="切换是否在 LLM prompt 里塞空间动作 hint；A/B 实验用，仅影响后续决策"
+        >
+          hint {control.hintEnabled ? 'ON' : 'OFF'}
+        </button>
         {control.currentAgent && (
           <span className="tag">
             {control.currentAgent.name} · 记忆 {control.currentAgent.memorySize}
@@ -1084,6 +1101,11 @@ function ThoughtLog({
                   </div>
                   <div className="thought-text">{t.thought}</div>
                   <div className="thought-action">→ {t.actionSummary}</div>
+                  {t.actionHint && (
+                    <div className="thought-hint" title="该动作的语义化情报（喂给 LLM 的 hint）">
+                      ◇ {t.actionHint}
+                    </div>
+                  )}
                 </div>
               );
             }

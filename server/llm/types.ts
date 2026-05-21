@@ -30,6 +30,12 @@ export interface LegalAction {
   id: string;
   /** 给 LLM 输入与前端展示用的中文摘要 */
   label: string;
+  /**
+   * 空间动作的"战略情报"：把 v/e/h id 翻译成周围资源/概率/建筑分布的可读文本。
+   * 见 server/llm/actionHints.ts。仅 setup-/build-/move-robber 等空间动作填，
+   * 银行兑换 / 发展卡 / END_TURN 等不需要。
+   */
+  hint?: string;
   action: Action;
 }
 

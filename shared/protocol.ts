@@ -17,6 +17,12 @@ export interface AiThoughtEvent {
   thought: string;
   actionId: string;
   actionSummary: string;
+  /**
+   * 该 actionId 对应的"语义化情报"（见 server/llm/actionHints.ts）。
+   * 仅空间动作有；前端在思考流面板里渲染，方便观察 LLM 是基于什么信息做的决定。
+   * discard fallback 等不走 LegalAction 的路径没有 hint。
+   */
+  actionHint?: string;
   /** 已通过服务端 Maker-Checker 的真实动作；前端可用来做棋盘联动高亮 */
   action?: Action;
   provider: string;
@@ -45,6 +51,12 @@ export interface AiControlState {
   busy: boolean;
   /** 当前局面是否存在可由 AI 推进的一步 */
   canStep: boolean;
+  /**
+   * LLM Provider 当前是否会在 prompt 里塞空间动作 hint。
+   * 仅影响 llm provider；rule/mock 永远忽略 hint。前端思考流的历史条目
+   * 不受此开关影响（已记录的 actionHint 字段照常显示），切换只影响后续 LLM 决策。
+   */
+  hintEnabled: boolean;
   provider: string;
   currentAgent?: {
     player: number;

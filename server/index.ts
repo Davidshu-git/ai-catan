@@ -41,6 +41,7 @@ const AI_EVENT_BUFFER = 60; // 每房间缓存最近 N 条 AI 事件，用于断
 const DEFAULT_ROOM = 'default'; // MVP：单房间
 const AI_PROVIDER = (process.env.AI_PROVIDER ?? 'llm').toLowerCase(); // rule | mock | llm
 const DEFAULT_AI_AUTOPLAY = process.env.AI_AUTOPLAY === '1'; // 默认手动，便于观察 AI 单步决策
+const DEFAULT_AI_HINT = process.env.LLM_HINT !== '0'; // LLM prompt 默认带空间动作 hint；=0 关闭
 const PLAYER_MODE = (process.env.PLAYER_MODE ?? 'all-ai').toLowerCase(); // all-ai | human0
 
 interface AiEventLogEntry {
@@ -56,6 +57,8 @@ interface Session {
   aiTimer: NodeJS.Timeout | null;
   /** 是否自动连续推进 AI；关闭时只响应前端 step_ai */
   aiAutoplay: boolean;
+  /** 当前是否在 LLM prompt 里塞空间动作 hint；运行时可切换便于 A/B */
+  aiHint: boolean;
   /** LLM 调用期间置 true，避免同一房间并发跑多个 AI 决策 */
   aiBusy: boolean;
   /** 每个 AI 席位独立 agent runtime（身份 / 性格 / 记忆 / provider） */
@@ -76,6 +79,7 @@ function getSession(roomId: string): Session {
       stall: { sig: '', count: 0 },
       aiTimer: null,
       aiAutoplay: DEFAULT_AI_AUTOPLAY,
+      aiHint: DEFAULT_AI_HINT,
       aiBusy: false,
       agents: createAgentRuntimes(game.state, AI_PROVIDER),
       aiEvents: [],
@@ -140,6 +144,7 @@ function getAiControlState(session: Session): AiControlState {
     queued: session.aiTimer != null,
     busy: session.aiBusy,
     canStep: hasAiWork(session.game.state),
+    hintEnabled: session.aiHint,
     provider: currentAgent?.providerName ?? AI_PROVIDER,
     currentAgent: currentAgent
       ? {
@@ -195,7 +200,12 @@ function rememberThought(session: Session, ev: AiThoughtEvent) {
   ev.agentMemorySize = agent.memory.length;
 }
 
-function buildProvider(name: string, board: FullGame['board'], state: GameState): AiDecisionProvider {
+function buildProvider(
+  name: string,
+  board: FullGame['board'],
+  state: GameState,
+  useHint: boolean,
+): AiDecisionProvider {
   switch (name) {
     case 'mock':
       return createMockProvider();
@@ -209,7 +219,7 @@ function buildProvider(name: string, board: FullGame['board'], state: GameState)
         );
         return createRuleProvider(board, state);
       }
-      return createLlmProvider({ apiKey });
+      return createLlmProvider({ apiKey, useHint });
     }
     default:
       console.warn(`[catan-server] 未知 AI_PROVIDER="${name}"，回退到 rule`);
@@ -246,7 +256,12 @@ function scheduleAI(
 
     const startVersion = session.version;
     const agent = getDecisionAgent(session, game.state);
-    const provider = buildProvider(agent?.providerName ?? AI_PROVIDER, game.board, game.state);
+    const provider = buildProvider(
+      agent?.providerName ?? AI_PROVIDER,
+      game.board,
+      game.state,
+      session.aiHint,
+    );
     let outcome: Awaited<ReturnType<typeof decideAiStep>> | null = null;
     let decisionError: unknown = null;
     session.aiBusy = true;
@@ -402,6 +417,17 @@ io.on('connection', (socket: Socket) => {
       if (!s.aiAutoplay && s.aiBusy) s.version++;
       emitAiControl(io, DEFAULT_ROOM, s);
       if (s.aiAutoplay) scheduleAI(io, DEFAULT_ROOM);
+      ack?.({ ok: true });
+    },
+  );
+
+  socket.on(
+    'set_ai_hint',
+    (payload: { hint: boolean }, ack?: (r: { ok: boolean }) => void) => {
+      const s = getSession(DEFAULT_ROOM);
+      s.aiHint = Boolean(payload.hint);
+      // 仅影响后续 LLM 决策；正在进行的 LLM 调用结果不作废（hint 不改变状态合法性）
+      emitAiControl(io, DEFAULT_ROOM, s);
       ack?.({ ok: true });
     },
   );

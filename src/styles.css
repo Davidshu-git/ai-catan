@@ -454,6 +454,15 @@ select {
   font-weight: 700;
 }
 
+.thought-hint {
+  margin-top: 2px;
+  color: #6b6353;
+  font-size: 12px;
+  font-style: italic;
+  font-weight: 500;
+  line-height: 1.4;
+}
+
 .hint {
   background: #d7d0ad;
   border: 2px solid var(--line);
@@ -507,6 +516,21 @@ select {
   background: var(--accent);
   color: var(--cream);
   border-color: var(--accent-d);
+}
+
+.tag-btn {
+  font-family: inherit;
+  cursor: pointer;
+  transition: filter 0.12s;
+}
+
+.tag-btn:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+
+.tag-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 
 /* ---- 弹窗 + 彩带 ---- */

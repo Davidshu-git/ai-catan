@@ -19,6 +19,7 @@ import {
 } from '../../shared/rules';
 import { robberCandidates } from '../../shared/reducer';
 import type { LegalAction } from './types';
+import { settlementHint, cityHint, roadHint, robberHint } from './actionHints';
 
 /** 当前阶段 + 当前玩家的所有合法动作 */
 export function buildActionCatalog(b: Board, s: GameState): LegalAction[] {
@@ -51,6 +52,7 @@ function setupSettlements(b: Board, s: GameState): LegalAction[] {
       out.push({
         id: `setup-settlement-v${v.id}`,
         label: `在顶点 v${v.id} 放置初始房屋`,
+        hint: settlementHint(b, v.id),
         action: { type: 'PLACE_SETTLEMENT', v: v.id },
       });
     }
@@ -65,6 +67,7 @@ function setupRoads(b: Board, s: GameState): LegalAction[] {
       out.push({
         id: `setup-road-e${e.id}`,
         label: `在边 e${e.id} 放置初始道路`,
+        hint: roadHint(b, s, e.id, s.current),
         action: { type: 'PLACE_ROAD', e: e.id },
       });
     }
@@ -100,6 +103,7 @@ function moveRobberActions(b: Board, s: GameState): LegalAction[] {
     out.push({
       id: `move-robber-h${h.id}`,
       label: `把强盗移到地块 ${tag}`,
+      hint: robberHint(b, s, h.id, s.current),
       action: { type: 'MOVE_ROBBER', hex: h.id },
     });
   }
@@ -137,6 +141,7 @@ function mainActions(b: Board, s: GameState): LegalAction[] {
         out.push({
           id: `build-road-e${e.id}`,
           label: freeRoad ? `修路（免费）在边 e${e.id}` : `修路在边 e${e.id}`,
+          hint: roadHint(b, s, e.id, s.current),
           action: { type: 'BUILD_ROAD', e: e.id },
         });
       }
@@ -149,6 +154,7 @@ function mainActions(b: Board, s: GameState): LegalAction[] {
         out.push({
           id: `build-settlement-v${v.id}`,
           label: `建房屋在顶点 v${v.id}`,
+          hint: settlementHint(b, v.id),
           action: { type: 'BUILD_SETTLEMENT', v: v.id },
         });
       }
@@ -161,6 +167,7 @@ function mainActions(b: Board, s: GameState): LegalAction[] {
         out.push({
           id: `build-city-v${v.id}`,
           label: `升级城市在顶点 v${v.id}`,
+          hint: cityHint(b, v.id),
           action: { type: 'BUILD_CITY', v: v.id },
         });
       }

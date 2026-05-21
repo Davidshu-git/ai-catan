@@ -22,6 +22,8 @@ const DEFAULT_MODEL = process.env.LLM_MODEL ?? 'MiniMax-M2.7';
 const LLM_TIMEOUT_MS = Number(process.env.LLM_TIMEOUT_MS ?? 30_000);
 const LLM_MAX_TOKENS = Number(process.env.LLM_MAX_TOKENS ?? 1024);
 const LLM_TEMPERATURE = Number(process.env.LLM_TEMPERATURE ?? 0.4);
+// LLM_HINT=0 关闭空间动作的语义化 hint，用于 A/B 对比
+const LLM_HINT_DEFAULT = process.env.LLM_HINT !== '0';
 
 const SYSTEM_PROMPT = `你是卡坦岛策略助手，正在替一名 AI 玩家做一步决策。
 
@@ -31,7 +33,14 @@ const SYSTEM_PROMPT = `你是卡坦岛策略助手，正在替一名 AI 玩家�
 3. thought 用中文，1-3 句话，说清为什么选这个
 4. 不要写规则解释、不要用代码块包裹、不要前后缀文字，只返回 JSON 本体
 5. 如果输入里有 agentProfile，你必须延续该 agent 的性格、偏好和记忆，但仍以当前合法动作列表为准
-6. 偏好：升级城市 > 建房屋 > 朝资源点修路 > 买发展卡 > END_TURN；银行兑换只在差 1 张关键资源时用`;
+6. 偏好：升级城市 > 建房屋 > 朝资源点修路 > 买发展卡 > END_TURN；银行兑换只在差 1 张关键资源时用
+
+hint 阅读约定（仅空间动作有；没有 hint 的行就只看 label）：
+- "麦8(5)" = 该地块 麦田、点数 8、骰子概率 pip=5（pip 越高产出概率越大，6/8=5 最高）
+- "总产出 12pip" = 顶点周边三块地的 pip 总和（不含沙漠）
+- "港口(木2:1)" / "港口(通用3:1)" = 该顶点附带港口
+- "通往：v23→..." = 该路通向的空顶点的资源潜力
+- "⚠" = 明显不利提示（如强盗只压己方建筑）`;
 
 interface AnthropicResp {
   content?: Array<{ type: string; text?: string }>;
@@ -39,9 +48,17 @@ interface AnthropicResp {
   [k: string]: unknown;
 }
 
-/** 压紧 legalActions，每行 `id<TAB>label`，便于 LLM 看到全貌且省 token */
-function formatLegalActions(actions: LegalAction[]): string {
-  return actions.map((a) => `${a.id}\t${a.label}`).join('\n');
+/**
+ * 压紧 legalActions：每行 `id<TAB>label[<TAB>hint]`，hint 可选。
+ * hint 仅出现在空间动作上（见 actionHints.ts），可由 useHint=false 一键关掉。
+ */
+function formatLegalActions(actions: LegalAction[], useHint: boolean): string {
+  return actions
+    .map((a) => {
+      if (useHint && a.hint) return `${a.id}\t${a.label}\t${a.hint}`;
+      return `${a.id}\t${a.label}`;
+    })
+    .join('\n');
 }
 
 /** 压紧 PlayerView：自己全留，他人只留摘要，hexes 留 id+terrain+number+robber */
@@ -64,7 +81,7 @@ function formatView(view: PlayerView): string {
   });
 }
 
-function buildUserMessage(input: LlmDecisionInput): string {
+function buildUserMessage(input: LlmDecisionInput, useHint: boolean): string {
   const parts: string[] = [];
   if (input.agent) {
     parts.push('你的独立 agent 身份（JSON）：');
@@ -83,8 +100,13 @@ function buildUserMessage(input: LlmDecisionInput): string {
   parts.push('当前局面（你的视角，JSON）：');
   parts.push(formatView(input.view));
   parts.push('');
-  parts.push(`合法动作列表（${input.legalActions.length} 个，必须从这里选一个 id）：`);
-  parts.push(formatLegalActions(input.legalActions));
+  const hintLegend = useHint
+    ? '每行格式：actionId<TAB>label<TAB>hint（hint 是该空间动作的资源/概率/敌我分布情报，仅空间动作有）。'
+    : '每行格式：actionId<TAB>label。';
+  parts.push(
+    `合法动作列表（${input.legalActions.length} 个，必须从这里选一个 id）。${hintLegend}`,
+  );
+  parts.push(formatLegalActions(input.legalActions, useHint));
   if (input.retryFeedback && input.retryFeedback.length > 0) {
     parts.push('');
     parts.push('【重试反馈】之前的尝试失败：');
@@ -192,15 +214,18 @@ export interface LlmProviderOptions {
   apiKey: string;
   host?: string;
   model?: string;
+  /** 是否在 prompt 里塞 actionHints；默认读 LLM_HINT 环境变量（缺省/=1 → true，=0 → false） */
+  useHint?: boolean;
 }
 
 export function createLlmProvider(opts: LlmProviderOptions): AiDecisionProvider {
   const host = opts.host ?? DEFAULT_HOST;
   const model = opts.model ?? DEFAULT_MODEL;
+  const useHint = opts.useHint ?? LLM_HINT_DEFAULT;
   return {
-    name: `llm(${model})`,
+    name: `llm(${model}${useHint ? '+hint' : ''})`,
     async decide(input: LlmDecisionInput): Promise<LlmDecisionOutput> {
-      const userMsg = buildUserMessage(input);
+      const userMsg = buildUserMessage(input, useHint);
       const raw = await callMinimax(opts.apiKey, host, model, SYSTEM_PROMPT, userMsg);
       let parsed: unknown;
       try {
