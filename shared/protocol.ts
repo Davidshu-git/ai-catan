@@ -120,6 +120,14 @@ export interface AiControlState {
    */
   hintEnabled: boolean;
   provider: string;
+  /** 可在后端切换的 AI provider / 模型档位；不包含任何 API key */
+  providerOptions: Array<{
+    key: string;
+    label: string;
+    available: boolean;
+    model?: string;
+    reason?: string;
+  }>;
   /** 各 AI 席位当前的 provider；前端按玩家展示开关时使用 */
   agentProviders: Record<number, string>;
   /** 各 AI 席位的角色策略提示词（即 LLM prompt 内 agent.personality 字段）；前端用作悬浮提示 */

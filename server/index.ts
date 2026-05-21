@@ -32,6 +32,7 @@ import type { AiDecisionProvider, AiErrorEvent, AiThoughtEvent, AiTimingEvent } 
 import { createRuleProvider } from './llm/ruleProvider';
 import { createMockProvider } from './llm/mockProvider';
 import { createLlmProvider } from './llm/llmProvider';
+import { createQwenProvider } from './llm/qwenProvider';
 import { decideAiStep } from './llm/controller';
 import {
   createAgentRuntimes,
@@ -52,10 +53,49 @@ const STALL_LIMIT = 8; // 状态指纹连续重复阈值
 const AI_EVENT_BUFFER = 60; // 每房间缓存最近 N 条 AI 事件，用于断线后补拉
 const TRADE_EVENT_BUFFER = 80; // 每房间缓存最近 N 条交易谈判事件
 const DEFAULT_ROOM = 'default'; // MVP：单房间
-const AI_PROVIDER = (process.env.AI_PROVIDER ?? 'llm').toLowerCase(); // rule | mock | llm
+const MINIMAX_MODEL = process.env.LLM_MODEL ?? 'MiniMax-M2.7';
+const QWEN_MODEL = process.env.QWEN_MODEL ?? process.env.ALI_QWEN_MODEL ?? 'qwen3.6-plus';
+const QWEN_BASE_URL =
+  process.env.ALI_CODING_PLAN_BASE_URL ??
+  process.env.QWEN_BASE_URL ??
+  'https://coding.dashscope.aliyuncs.com/v1';
+const AI_PROVIDER = normalizeProviderName(process.env.AI_PROVIDER ?? 'minimax'); // rule | mock | minimax | qwen36
 const DEFAULT_AI_AUTOPLAY = process.env.AI_AUTOPLAY === '1'; // 默认手动，便于观察 AI 单步决策
 const DEFAULT_AI_HINT = process.env.LLM_HINT !== '0'; // LLM prompt 默认带空间动作 hint；=0 关闭
 const PLAYER_MODE = (process.env.PLAYER_MODE ?? 'all-ai').toLowerCase(); // all-ai | human0
+
+function normalizeProviderName(raw: string): string {
+  const v = String(raw ?? '').trim().toLowerCase();
+  if (v === 'llm' || v === 'minimax' || v === 'minimax-m27' || v === 'minimax-m2.7') {
+    return 'minimax';
+  }
+  if (v === 'qwen' || v === 'qwen36' || v === 'qwen3.6' || v === 'qwen3.6-plus') {
+    return 'qwen36';
+  }
+  if (v === 'rule' || v === 'mock') return v;
+  return 'rule';
+}
+
+function aiProviderOptions(): AiControlState['providerOptions'] {
+  return [
+    { key: 'rule', label: '规则 AI', available: true },
+    { key: 'mock', label: 'Mock LLM', available: true },
+    {
+      key: 'minimax',
+      label: `MiniMax ${MINIMAX_MODEL}`,
+      model: MINIMAX_MODEL,
+      available: Boolean(process.env.MINIMAX_API_KEY),
+      reason: process.env.MINIMAX_API_KEY ? undefined : '缺 MINIMAX_API_KEY',
+    },
+    {
+      key: 'qwen36',
+      label: `Qwen ${QWEN_MODEL}`,
+      model: QWEN_MODEL,
+      available: Boolean(process.env.ALI_CODING_PLAN_KEY),
+      reason: process.env.ALI_CODING_PLAN_KEY ? undefined : '缺 ALI_CODING_PLAN_KEY',
+    },
+  ];
+}
 
 interface AiEventLogEntry {
   kind: 'thought' | 'error';
@@ -179,6 +219,7 @@ function getAiControlState(session: Session): AiControlState {
     canStep: hasAiWork(session.game.state),
     hintEnabled: session.aiHint,
     provider: currentAgent?.providerName ?? session.aiProvider,
+    providerOptions: aiProviderOptions(),
     agentProviders,
     agentPersonalities,
     currentAgent: currentAgent
@@ -303,20 +344,35 @@ function buildProvider(
   state: GameState,
   useHint: boolean,
 ): AiDecisionProvider {
-  switch (name) {
+  switch (normalizeProviderName(name)) {
     case 'mock':
       return createMockProvider();
     case 'rule':
       return createRuleProvider(board, state);
-    case 'llm': {
+    case 'minimax': {
       const apiKey = process.env.MINIMAX_API_KEY;
       if (!apiKey) {
         console.warn(
-          '[catan-server] AI_PROVIDER=llm 但缺 MINIMAX_API_KEY，本次回退到 rule（请在 .env 里填上）',
+          '[catan-server] MiniMax provider 缺 MINIMAX_API_KEY，本次回退到 rule（请在 .env 里填上）',
         );
         return createRuleProvider(board, state);
       }
       return createLlmProvider({ apiKey, useHint });
+    }
+    case 'qwen36': {
+      const apiKey = process.env.ALI_CODING_PLAN_KEY;
+      if (!apiKey) {
+        console.warn(
+          '[catan-server] Qwen provider 缺 ALI_CODING_PLAN_KEY，本次回退到 rule（请在 .env 里填上）',
+        );
+        return createRuleProvider(board, state);
+      }
+      return createQwenProvider({
+        apiKey,
+        baseUrl: QWEN_BASE_URL,
+        model: QWEN_MODEL,
+        useHint,
+      });
     }
     default:
       console.warn(`[catan-server] 未知 AI_PROVIDER="${name}"，回退到 rule`);
@@ -573,7 +629,7 @@ io.on('connection', (socket: Socket) => {
       ack?: (r: { ok: boolean }) => void,
     ) => {
       const s = getSession(DEFAULT_ROOM);
-      const next = String(payload.provider ?? '').toLowerCase() === 'llm' ? 'llm' : 'rule';
+      const next = normalizeProviderName(payload.provider);
       if (typeof payload.player === 'number') {
         const agent = s.agents[payload.player];
         if (!agent) {

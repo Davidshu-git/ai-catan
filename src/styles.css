@@ -46,6 +46,19 @@ body {
   background: url('/assets/sea.png') center / cover no-repeat, var(--sea-deep, #1f3038);
 }
 
+.game-title-mark {
+  position: absolute;
+  top: 14px;
+  left: 16px;
+  z-index: 4;
+  width: clamp(170px, 22vmin, 320px);
+  max-width: calc(100% - 32px);
+  height: auto;
+  pointer-events: none;
+  user-select: none;
+  filter: drop-shadow(5px 7px 0 rgba(18, 15, 13, 0.24)) drop-shadow(0 10px 16px rgba(0, 0, 0, 0.28));
+}
+
 .board-wrap {
   flex: 1;
   display: flex;
@@ -433,33 +446,33 @@ select {
   pointer-events: none;
 }
 
-.player-ai-toggle {
+.player-ai-select {
+  appearance: none;
+  -webkit-appearance: none;
   font: inherit;
   font-size: 10px;
   font-weight: 800;
-  letter-spacing: 0.4px;
-  padding: 1px 6px;
+  letter-spacing: 0;
+  min-width: 58px;
+  max-width: 68px;
+  padding: 1px 4px;
+  text-align: center;
+  text-align-last: center;
   border-radius: 3px;
   border: 1px solid rgba(58, 44, 33, 0.5);
-  background: rgba(232, 215, 180, 0.55);
-  color: var(--muted);
+  background: var(--accent);
+  color: var(--cream);
   cursor: pointer;
   transition: background 0.15s, color 0.15s, border-color 0.15s;
 }
 
-.player-ai-toggle:hover:not(:disabled) {
-  background: rgba(232, 215, 180, 0.85);
+.player-ai-select:hover:not(:disabled) {
+  background: var(--accent-d);
 }
 
-.player-ai-toggle:disabled {
+.player-ai-select:disabled {
   opacity: 0.55;
   cursor: not-allowed;
-}
-
-.player-ai-toggle.is-on {
-  background: var(--accent);
-  color: var(--cream);
-  border-color: var(--accent-d);
 }
 
 .dice-hud .die {
@@ -1096,6 +1109,11 @@ select {
 @media (max-width: 860px) {
   .app { flex-direction: column; }
   .splitter { display: none; }
+  .game-title-mark {
+    top: 10px;
+    left: 10px;
+    width: clamp(145px, 24vmin, 230px);
+  }
   .sidebar {
     width: 100%;
     flex: 0 0 48%;

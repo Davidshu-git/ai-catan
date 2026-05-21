@@ -1,20 +1,34 @@
-// 一次性调 MiniMax 验证 LLM Provider 链路。
-// 用法（容器内、网络外，因为 MiniMax 是公网端点）：
+// 一次性调真实 LLM 验证 Provider 链路。
+// 用法（容器内、网络外，因为 LLM 是公网端点）：
 //   docker run --rm --env-file .env -v "$PWD":/app -w /app node:20-alpine \
 //     sh -c "npm install --no-fund --no-audit --silent && npx tsx server/llmSmoke.ts"
+// 可用 AI_PROVIDER=minimax（默认）或 AI_PROVIDER=qwen36。
 
 import { createLlmProvider } from './llm/llmProvider';
+import { createQwenProvider } from './llm/qwenProvider';
 import type { LegalAction, LlmDecisionInput } from './llm/types';
 import type { PlayerView } from './llm/stateTranslator';
 import { COSTS } from '../shared/types';
 
-const apiKey = process.env.MINIMAX_API_KEY;
-if (!apiKey) {
-  console.error('❌ 缺 MINIMAX_API_KEY（请确认 .env / 容器 --env-file）');
-  process.exit(1);
-}
-
-const provider = createLlmProvider({ apiKey });
+const providerName = (process.env.AI_PROVIDER ?? 'minimax').toLowerCase();
+const provider =
+  providerName === 'qwen36' || providerName === 'qwen' || providerName === 'qwen3.6-plus'
+    ? (() => {
+        const apiKey = process.env.ALI_CODING_PLAN_KEY;
+        if (!apiKey) {
+          console.error('❌ 缺 ALI_CODING_PLAN_KEY（请确认 .env / 容器 --env-file）');
+          process.exit(1);
+        }
+        return createQwenProvider({ apiKey, useHint: false });
+      })()
+    : (() => {
+        const apiKey = process.env.MINIMAX_API_KEY;
+        if (!apiKey) {
+          console.error('❌ 缺 MINIMAX_API_KEY（请确认 .env / 容器 --env-file）');
+          process.exit(1);
+        }
+        return createLlmProvider({ apiKey, useHint: false });
+      })();
 
 // 伪造一个 main 阶段的最小 view + 3 个 legalActions
 const view: PlayerView = {

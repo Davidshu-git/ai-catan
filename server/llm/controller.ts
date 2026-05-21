@@ -308,7 +308,7 @@ function buildModelContext(
   const legalActionsText = formatLegalActions(input.legalActions, promptUseHint);
   const retryFeedbackCount = input.retryFeedback?.length ?? 0;
 
-  if (providerName.startsWith('llm(')) {
+  if (providerName.startsWith('llm(') || providerName.startsWith('qwen(')) {
     const userPrompt = buildLlmUserMessage(input, promptUseHint);
     const systemPrompt = LLM_SYSTEM_PROMPT;
     return {

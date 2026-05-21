@@ -192,6 +192,7 @@ const DEFAULT_AI_CONTROL: AiControlState = {
   canStep: false,
   hintEnabled: true,
   provider: 'unknown',
+  providerOptions: [],
   agentProviders: {},
   agentPersonalities: {},
 };
@@ -219,6 +220,30 @@ function readStoredSidebarWidth(): number {
   const raw = window.localStorage.getItem(SIDEBAR_STORAGE_KEY);
   const n = raw == null ? NaN : Number(raw);
   return Number.isFinite(n) && n > 0 ? n : SIDEBAR_DEFAULT;
+}
+
+function normalizeProviderKey(provider: string | undefined): string {
+  const p = (provider ?? '').toLowerCase();
+  if (p === 'llm' || p.startsWith('llm(') || p === 'minimax') return 'minimax';
+  if (p === 'qwen' || p === 'qwen36' || p.startsWith('qwen(')) return 'qwen36';
+  if (p === 'mock') return 'mock';
+  if (p === 'rule') return 'rule';
+  return p || 'rule';
+}
+
+function providerShortLabel(provider: string | undefined): string {
+  switch (normalizeProviderKey(provider)) {
+    case 'minimax':
+      return 'MiniMax';
+    case 'qwen36':
+      return 'Qwen3.6';
+    case 'mock':
+      return 'Mock';
+    case 'rule':
+      return '规则';
+    default:
+      return 'AI';
+  }
 }
 
 export function App() {
@@ -294,8 +319,8 @@ export function App() {
     socket.emit('set_ai_hint', { hint });
   }, []);
 
-  const setAiProvider = useCallback((playerId: number, useLlm: boolean) => {
-    socket.emit('set_ai_provider', { player: playerId, provider: useLlm ? 'llm' : 'rule' });
+  const setAiProvider = useCallback((playerId: number, provider: string) => {
+    socket.emit('set_ai_provider', { player: playerId, provider });
   }, []);
 
   const finishAiStepTimer = useCallback((ok: boolean) => {
@@ -549,6 +574,12 @@ export function App() {
       style={{ ['--sidebar-width' as string]: `${Math.round(sidebarWidth)}px` }}
     >
       <div className="board-area">
+        <img
+          className="game-title-mark"
+          src="/assets/title-ai-catan.png"
+          alt="AI 大战：卡坦岛"
+          draggable={false}
+        />
         <div className="board-wrap">
           <Board
             board={board}
@@ -588,8 +619,9 @@ export function App() {
             }
             agentProviders={aiControl.agentProviders}
             agentPersonalities={aiControl.agentPersonalities}
+            providerOptions={aiControl.providerOptions}
             connected={connected}
-            onToggleProvider={setAiProvider}
+            onSetProvider={setAiProvider}
           />
           <Phase
             game={game}
@@ -695,15 +727,17 @@ function Players({
   processingMs,
   agentProviders,
   agentPersonalities,
+  providerOptions,
   connected,
-  onToggleProvider,
+  onSetProvider,
 }: {
   game: FullGame;
   processingMs: number | null;
   agentProviders: Record<number, string>;
   agentPersonalities: Record<number, string>;
+  providerOptions: AiControlState['providerOptions'];
   connected: boolean;
-  onToggleProvider: (playerId: number, useLlm: boolean) => void;
+  onSetProvider: (playerId: number, provider: string) => void;
 }) {
   const { board, state } = game;
   const prevResourcesRef = useRef<Record<number, ResMap>>(
@@ -744,17 +778,24 @@ function Players({
                 <span className="player-dot" style={{ background: pl.color }} />
                 <span className="player-name">{pl.name}</span>
                 {pl.isAI && (() => {
-                  const useLlm = (agentProviders[pl.id] ?? '').startsWith('llm');
+                  const provider = normalizeProviderKey(agentProviders[pl.id]);
                   return (
-                    <button
-                      type="button"
-                      className={`player-ai-toggle${useLlm ? ' is-on' : ''}`}
+                    <select
+                      className="player-ai-select"
+                      value={provider}
                       disabled={!connected}
-                      onClick={() => onToggleProvider(pl.id, !useLlm)}
-                      title={useLlm ? '当前走大模型，点击切到规则' : '当前走规则，点击切到大模型'}
+                      onChange={(e) => onSetProvider(pl.id, e.target.value)}
+                      title="单独切换这个 AI 玩家使用的后端模型"
                     >
-                      AI
-                    </button>
+                      {(providerOptions.length > 0
+                        ? providerOptions
+                        : [{ key: 'rule', label: '规则 AI', available: true }]
+                      ).map((option) => (
+                        <option key={option.key} value={option.key} disabled={!option.available}>
+                          {providerShortLabel(option.key)}
+                        </option>
+                      ))}
+                    </select>
                   );
                 })()}
               </div>

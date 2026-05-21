@@ -28,6 +28,7 @@ services:
       # LLM_TIMEOUT_MS=30000 调 LLM 超时
       # LLM_TEMPERATURE=0.4  棋类决策不需要太发散
       # MINIMAX_API_HOST=api.minimaxi.com  国内端；国际版用 api.minimax.io
+      # ALI_CODING_PLAN_BASE_URL=https://coding.dashscope.aliyuncs.com/v1  阿里 Qwen 兼容端点
     ports:
       - "3001:3001"
     volumes:

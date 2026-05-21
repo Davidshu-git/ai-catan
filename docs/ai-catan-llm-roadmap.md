@@ -16,11 +16,12 @@
 第二阶段的主体能力已经落地：
 
 - `server/llm/` 已有 Provider 抽象、状态翻译器、合法动作目录、Maker-Checker、rule/mock/真实 LLM Provider。
-- `server/index.ts` 的 `scheduleAI()` 已改为走 `decideAiStep()`，并支持 `AI_PROVIDER=rule|mock|llm`。
+- `server/index.ts` 的 `scheduleAI()` 已改为走 `decideAiStep()`，并支持 `AI_PROVIDER=rule|mock|minimax|qwen36`（旧值 `llm` 映射到 minimax）。
 - `shared/protocol.ts` 已定义 `AiThoughtEvent` / `AiErrorEvent` / `AiControlState`，服务端已广播 `ai_thought` / `ai_error` / `ai_control_state`。
 - 前端 `src/App.tsx` 已有 AI 思考流面板和 AI 控制面板，可切换自动推进 / 暂停 / 单步推进。
 - 当前默认 `PLAYER_MODE=all-ai`：4 个席位都是 AI，前端作为观察和控制台；`PLAYER_MODE=human0` 可临时恢复 P0 人类旧模式。
 - `server/agents/` 已有每玩家独立 `AiAgentRuntime`：P0/P1/P2/P3 分别持有自己的性格、短期记忆、providerName 和 decisionCount。
+- 前端玩家卡片支持按 AI 席位独立切换 provider：rule / mock / MiniMax / Qwen 3.6 Plus；Qwen 读取 `ALI_CODING_PLAN_KEY`，模型默认 `qwen3.6-plus`。
 - LLM 输入已注入 agent 身份、性格和最近记忆；每次成功 `ai_thought` 会写回对应 agent 的 memory。
 - `sim.ts` 已改为走 controller 链路，能用 `AI_PROVIDER=rule` 或 `AI_PROVIDER=mock` 做压测。
 - 服务端已增加异步 LLM 决策保护：LLM 调用期间不并发启动第二个 AI 决策；若等待期间人类动作或 `new_game` 改变权威状态，旧决策会被丢弃并重新调度。
@@ -389,15 +390,15 @@ export type AiDecisionTrace = {
 ```bash
 AI_PROVIDER=rule
 AI_PROVIDER=mock
-AI_PROVIDER=llm
+AI_PROVIDER=minimax
+AI_PROVIDER=qwen36
 ```
 
-第一阶段验证顺序：
+第一阶段验证顺序（压测仍建议只跑 rule/mock；真实 LLM 用 smoke，避免烧 token）：
 
 ```bash
 AI_PROVIDER=rule  npx tsx sim.ts
 AI_PROVIDER=mock  npx tsx sim.ts
-AI_PROVIDER=llm   npx tsx sim.ts
 ```
 
 真实 LLM 模式先少量跑局，稳定后再扩大。
