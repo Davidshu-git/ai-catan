@@ -11,8 +11,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 **一律在容器中跑，不要用宿主机本地环境**（宿主机不装 Node 工具链；本仓库**故意不提交 `package-lock.json`**，容器构建用 `npm install` 而非 `npm ci`）。
 
 ```bash
-# 部署 / 预览：static 前端 + node 后端，docker compose 拉起整套（前端 → http://<host>:8088）
-docker compose up -d --build
+# 起停：单一栈，热加载（Vite HMR + tsx watch），前端 → http://<host>:8088
+# 改 src/ 浏览器自动热更；改 server/ 或 shared/ 后端自动重启；node_modules 用 named volume 持久化
+docker compose up -d
+docker compose logs -f
 docker compose down
 
 # 类型检查（前端 + 后端）—— 容器内
@@ -71,8 +73,7 @@ src/                   ← Vite + React 前端，纯渲染 + 通过 socket 转�
   vite-env.d.ts        import.meta.env 类型（VITE_SERVER_URL）
 
 sim.ts                 ← 无头压测，直接 import shared/，跑 60 局全 AI
-nginx.conf             ← 前端容器内 nginx：/ 走 SPA、/socket.io/ 反代到 catan-server:3001
-docker-compose.yml     ← 两个服务：catan-server（后端）+ catan（前端 nginx，端口 8088）
+docker-compose.yml     ← 两个服务：catan-server（后端 tsx watch）+ catan（前端 Vite dev，宿主端口 8088）
 ```
 
 ### 数据流（重要）

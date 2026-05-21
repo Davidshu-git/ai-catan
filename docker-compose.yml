@@ -1,11 +1,21 @@
+# ============================================================
+# 本地热加载栈（dev + prod 合一）：
+#   - catan-server：tsx watch，改 server/ 或 shared/ 自动重启
+#   - catan：Vite dev server，HMR；浏览器入口 http://<host>:8088
+# 源码 bind mount，node_modules 用 named volume 持久化（首次安装 ~30s）。
+# 启动：docker compose up -d
+# 停止：docker compose down
+# ============================================================
+
 services:
   catan-server:
-    build:
-      context: .
-      dockerfile: server/Dockerfile
-    image: catan-server:latest
+    image: node:20-alpine
     container_name: catan-server
-    # .env 不入库（含 MINIMAX_API_KEY 等 secret）；缺文件时下面的 environment 也能跑（自动回退到 rule）
+    working_dir: /app
+    command: >
+      sh -c "npm install --no-fund --no-audit --no-package-lock --include=dev
+      && npx tsx watch --clear-screen=false server/index.ts"
+    # .env 不入库（含 MINIMAX_API_KEY 等 secret）；缺文件也能起（自动回退到 rule）
     env_file:
       - path: .env
         required: false
@@ -14,20 +24,37 @@ services:
       - AI_PROVIDER=${AI_PROVIDER:-llm}
       - PLAYER_MODE=${PLAYER_MODE:-all-ai}
       - AI_AUTOPLAY=${AI_AUTOPLAY:-0}
-      # AI_TICK_MS=460  默认；调慢便于观察 AI 思考流可设大一点
-      # LLM_TIMEOUT_MS=30000  调 LLM 超时
-      # LLM_TEMPERATURE=0.4   棋类决策不需要太发散
+      # AI_TICK_MS=460       默认；调慢便于观察 AI 思考流可设大一点
+      # LLM_TIMEOUT_MS=30000 调 LLM 超时
+      # LLM_TEMPERATURE=0.4  棋类决策不需要太发散
       # MINIMAX_API_HOST=api.minimaxi.com  国内端；国际版用 api.minimax.io
+    ports:
+      - "3001:3001"
+    volumes:
+      - .:/app
+      - catan_server_node_modules:/app/node_modules
     restart: unless-stopped
 
   catan:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    image: catan-web:latest
+    image: node:20-alpine
     container_name: catan
+    working_dir: /app
+    command: >
+      sh -c "npm install --no-fund --no-audit --no-package-lock
+      && npx vite --host 0.0.0.0 --port 5173"
+    environment:
+      # 让 vite.config.ts 把 /socket.io 反代到后端容器，浏览器走同源不挑 host 名
+      - VITE_SOCKET_PROXY=http://catan-server:3001
     ports:
-      - "8088:80"
+      # 容器内 Vite 听 5173，宿主对外仍是 8088
+      - "8088:5173"
+    volumes:
+      - .:/app
+      - catan_web_node_modules:/app/node_modules
     depends_on:
       - catan-server
     restart: unless-stopped
+
+volumes:
+  catan_web_node_modules:
+  catan_server_node_modules:
