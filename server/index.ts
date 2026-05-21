@@ -161,7 +161,7 @@ function createServerGame(): FullGame {
   if (PLAYER_MODE !== 'human0') {
     for (const p of game.state.players) {
       p.isAI = true;
-      if (p.id === 0) p.name = '红';
+      if (p.id === 0) p.name = '';
     }
     game.state.log = [{ text: '观察局开始：4 个独立 AI Agent 将按控制面板逐步行动。' }];
   }

@@ -234,9 +234,9 @@ function normalizeProviderKey(provider: string | undefined): string {
 function providerShortLabel(provider: string | undefined): string {
   switch (normalizeProviderKey(provider)) {
     case 'minimax':
-      return 'MiniMax';
+      return 'mini';
     case 'qwen36':
-      return 'Qwen3.6';
+      return 'qwen';
     case 'mock':
       return 'Mock';
     case 'rule':
