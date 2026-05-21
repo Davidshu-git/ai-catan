@@ -95,6 +95,28 @@ function Die({ v }: { v: number }) {
   );
 }
 
+function DiceHud({ dice, turn }: { dice: [number, number] | null; turn: number }) {
+  return (
+    <div className="dice-hud" aria-label={dice ? `骰子 ${dice[0]} 和 ${dice[1]}` : '尚未掷骰'}>
+      <div className="dice">
+        {dice ? (
+          <>
+            <Die key={`d1-${turn}-${dice[0]}-${dice[1]}`} v={dice[0]} />
+            <Die key={`d2-${turn}-${dice[0]}-${dice[1]}`} v={dice[1]} />
+            <span className="dice-sum">= {dice[0] + dice[1]}</span>
+          </>
+        ) : (
+          <>
+            <div className="die die-empty">?</div>
+            <div className="die die-empty">?</div>
+            <span className="dice-sum">= --</span>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 const CONFETTI_COLORS = ['#9b3f34', '#526b3b', '#b59645', '#3e668f', '#874638', '#efe3c8'];
 
 function Confetti() {
@@ -144,6 +166,14 @@ type ThoughtLogItem =
   | { kind: 'error'; data: AiErrorEvent };
 
 type AiBoardFocus = { player: number; action: Action; ts: number };
+type AiStepTimer = {
+  running: boolean;
+  startedAt: number | null;
+  elapsedMs: number;
+  lastMs: number | null;
+  lastOk: boolean | null;
+};
+type SidebarEventTab = 'thoughts' | 'log';
 
 const THOUGHT_LOG_MAX = 80;
 const DEFAULT_AI_CONTROL: AiControlState = {
@@ -155,11 +185,31 @@ const DEFAULT_AI_CONTROL: AiControlState = {
   provider: 'unknown',
 };
 
+const EMPTY_AI_STEP_TIMER: AiStepTimer = {
+  running: false,
+  startedAt: null,
+  elapsedMs: 0,
+  lastMs: null,
+  lastOk: null,
+};
+
 // 左右分隔条：侧栏宽度上下限与持久化
 const SIDEBAR_DEFAULT = 372;
 const SIDEBAR_MIN = 280;
 const SIDEBAR_MAX_RATIO = 0.7;
 const SIDEBAR_STORAGE_KEY = 'catan-sidebar-width';
+
+function nowMs(): number {
+  return typeof performance === 'undefined' ? Date.now() : performance.now();
+}
+
+function formatDuration(ms: number): string {
+  if (ms < 1000) return `${Math.max(0, Math.round(ms))}ms`;
+  if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`;
+  const minutes = Math.floor(ms / 60000);
+  const seconds = Math.floor((ms % 60000) / 1000);
+  return `${minutes}m ${seconds}s`;
+}
 
 function readStoredSidebarWidth(): number {
   if (typeof window === 'undefined') return SIDEBAR_DEFAULT;
@@ -177,8 +227,14 @@ export function App() {
   const [thoughtLog, setThoughtLog] = useState<ThoughtLogItem[]>([]);
   const [aiFocus, setAiFocus] = useState<AiBoardFocus | null>(null);
   const [aiControl, setAiControl] = useState<AiControlState>(DEFAULT_AI_CONTROL);
+  const [aiStepTimer, setAiStepTimer] = useState<AiStepTimer>(EMPTY_AI_STEP_TIMER);
+  const [aiAutoTimer, setAiAutoTimer] = useState<AiStepTimer>(EMPTY_AI_STEP_TIMER);
   const [sidebarWidth, setSidebarWidth] = useState<number>(readStoredSidebarWidth);
+  const [sidebarEventTab, setSidebarEventTab] = useState<SidebarEventTab>('thoughts');
   const draggingRef = useRef(false);
+  const aiStepAckedRef = useRef(false);
+  const aiStepSawWorkRef = useRef(false);
+  const aiAutoActiveRef = useRef(false);
 
   // 防抖：拖拽时高频更新，停手 200ms 后才落盘
   useEffect(() => {
@@ -234,16 +290,99 @@ export function App() {
     socket.emit('set_ai_hint', { hint });
   }, []);
 
+  const finishAiStepTimer = useCallback((ok: boolean) => {
+    setAiStepTimer((timer) => {
+      if (!timer.running || timer.startedAt == null) return timer;
+      const elapsedMs = Math.max(0, nowMs() - timer.startedAt);
+      return {
+        running: false,
+        startedAt: null,
+        elapsedMs,
+        lastMs: elapsedMs,
+        lastOk: ok,
+      };
+    });
+  }, []);
+
+  const startAiAutoTimer = useCallback(() => {
+    aiAutoActiveRef.current = true;
+    setAiAutoTimer((timer) => {
+      if (timer.running) return timer;
+      return {
+        running: true,
+        startedAt: nowMs(),
+        elapsedMs: 0,
+        lastMs: timer.lastMs,
+        lastOk: timer.lastOk,
+      };
+    });
+  }, []);
+
+  const finishAiAutoTimer = useCallback((ok: boolean) => {
+    aiAutoActiveRef.current = false;
+    setAiAutoTimer((timer) => {
+      if (!timer.running || timer.startedAt == null) return timer;
+      const elapsedMs = Math.max(0, nowMs() - timer.startedAt);
+      return {
+        running: false,
+        startedAt: null,
+        elapsedMs,
+        lastMs: elapsedMs,
+        lastOk: ok,
+      };
+    });
+  }, []);
+
   const stepAi = useCallback(() => {
+    aiStepAckedRef.current = false;
+    aiStepSawWorkRef.current = false;
+    setAiStepTimer((timer) => ({
+      running: true,
+      startedAt: nowMs(),
+      elapsedMs: 0,
+      lastMs: timer.lastMs,
+      lastOk: timer.lastOk,
+    }));
     socket
       .timeout(2000)
       .emit('step_ai', (err: Error | null, res?: { ok: boolean; reason?: string }) => {
         if (err || !res || !res.ok) {
+          finishAiStepTimer(false);
           setToast(res?.reason ?? 'AI 暂时无法推进');
           setTimeout(() => setToast(null), 2200);
+          return;
         }
+        aiStepAckedRef.current = true;
       });
-  }, []);
+  }, [finishAiStepTimer]);
+
+  useEffect(() => {
+    if (!aiStepTimer.running || aiStepTimer.startedAt == null) return;
+    const tick = () => {
+      setAiStepTimer((timer) =>
+        timer.running && timer.startedAt != null
+          ? { ...timer, elapsedMs: Math.max(0, nowMs() - timer.startedAt) }
+          : timer,
+      );
+    };
+    tick();
+    const id = window.setInterval(tick, 100);
+    return () => window.clearInterval(id);
+  }, [aiStepTimer.running, aiStepTimer.startedAt]);
+
+  useEffect(() => {
+    if (!aiAutoTimer.running || aiAutoTimer.startedAt == null) return;
+    const tick = () => {
+      setAiAutoTimer((timer) =>
+        timer.running && timer.startedAt != null
+          ? { ...timer, elapsedMs: Math.max(0, nowMs() - timer.startedAt) }
+          : timer,
+      );
+    };
+    tick();
+    const id = window.setInterval(tick, 100);
+    return () => window.clearInterval(id);
+  }, [aiAutoTimer.running, aiAutoTimer.startedAt]);
 
   const flash = useCallback((m: string) => {
     setToast(m);
@@ -262,9 +401,34 @@ export function App() {
     const onThought = (ev: AiThoughtEvent) => {
       append({ kind: 'thought', data: ev });
       if (ev.action) setAiFocus({ player: ev.player, action: ev.action, ts: ev.ts });
+      if (aiStepAckedRef.current) {
+        aiStepAckedRef.current = false;
+        aiStepSawWorkRef.current = false;
+        finishAiStepTimer(true);
+      } else if (aiAutoActiveRef.current) {
+        finishAiAutoTimer(true);
+      }
     };
     const onError = (ev: AiErrorEvent) => append({ kind: 'error', data: ev });
-    const onAiControl = (ev: AiControlState) => setAiControl(ev);
+    const onAiControl = (ev: AiControlState) => {
+      setAiControl(ev);
+      const hasWork = ev.queued || ev.busy;
+      if (!aiStepAckedRef.current && ev.autoplay && hasWork) {
+        startAiAutoTimer();
+      } else if (aiAutoActiveRef.current && !hasWork) {
+        finishAiAutoTimer(ev.autoplay);
+      }
+      if (!aiStepAckedRef.current) return;
+      if (hasWork) {
+        aiStepSawWorkRef.current = true;
+        return;
+      }
+      if (aiStepSawWorkRef.current) {
+        aiStepAckedRef.current = false;
+        aiStepSawWorkRef.current = false;
+        finishAiStepTimer(true);
+      }
+    };
     socket.on('connect', onConnect);
     socket.on('disconnect', onDisconnect);
     socket.on('sync_state', onSync);
@@ -279,13 +443,18 @@ export function App() {
       socket.off('ai_error', onError);
       socket.off('ai_control_state', onAiControl);
     };
-  }, []);
+  }, [finishAiAutoTimer, finishAiStepTimer, startAiAutoTimer]);
 
   // new_game 时本地也清掉历史思考日志（server 同步会再补当前 buffer）
   useEffect(() => {
     if (game && game.state.turn === 0 && game.state.phase === 'setup1' && game.state.setupIndex === 0) {
       setThoughtLog([]);
       setAiFocus(null);
+      aiStepAckedRef.current = false;
+      aiStepSawWorkRef.current = false;
+      aiAutoActiveRef.current = false;
+      setAiStepTimer(EMPTY_AI_STEP_TIMER);
+      setAiAutoTimer(EMPTY_AI_STEP_TIMER);
     }
   }, [game?.state.turn, game?.state.phase, game?.state.setupIndex]);
 
@@ -366,6 +535,7 @@ export function App() {
             highlightPlayer={aiFocus?.player ?? null}
           />
         </div>
+        <DiceHud dice={state.dice} turn={state.turn} />
       </div>
 
       <div
@@ -382,13 +552,6 @@ export function App() {
       <aside className="sidebar">
         <div className="sidebar-scroll">
           <Players game={game} />
-          <AiControls
-            control={aiControl}
-            connected={connected}
-            onAutoplay={setAiAutoplay}
-            onStep={stepAi}
-            onToggleHint={setAiHint}
-          />
           <Phase
             game={game}
             mode={mode}
@@ -396,8 +559,24 @@ export function App() {
             dispatch={dispatch}
             flash={flash}
           />
-          <ThoughtLog items={thoughtLog} players={state.players} />
-          <Log state={state} />
+        </div>
+        <SidebarEventPanel
+          activeTab={sidebarEventTab}
+          onTabChange={setSidebarEventTab}
+          thoughtItems={thoughtLog}
+          players={state.players}
+          state={state}
+        />
+        <div className="sidebar-fixed-controls">
+          <AiControls
+            control={aiControl}
+            connected={connected}
+            stepTimer={aiStepTimer}
+            autoTimer={aiAutoTimer}
+            onAutoplay={setAiAutoplay}
+            onStep={stepAi}
+            onToggleHint={setAiHint}
+          />
         </div>
       </aside>
 
@@ -428,18 +607,22 @@ export function App() {
 function AiControls({
   control,
   connected,
+  stepTimer,
+  autoTimer,
   onAutoplay,
   onStep,
   onToggleHint,
 }: {
   control: AiControlState;
   connected: boolean;
+  stepTimer: AiStepTimer;
+  autoTimer: AiStepTimer;
   onAutoplay: (autoplay: boolean) => void;
   onStep: () => void;
   onToggleHint: (hint: boolean) => void;
 }) {
   const waiting = control.queued || control.busy;
-  const stepDisabled = !connected || control.autoplay || waiting || !control.canStep;
+  const stepDisabled = stepTimer.running || !connected || control.autoplay || waiting || !control.canStep;
   const status = control.busy
     ? '思考中'
     : control.queued
@@ -449,8 +632,7 @@ function AiControls({
         : '等待玩家';
 
   return (
-    <div className="card">
-      <h2>AI 控制</h2>
+    <div className="card card-plain">
       <div className="ai-control-head">
         <span className={`tag${control.autoplay ? ' tag-on' : ''}`}>
           {control.autoplay ? '自动' : '手动'}
@@ -481,8 +663,26 @@ function AiControls({
           {control.autoplay ? '暂停' : '自动推进'}
         </button>
         <button className="btn" disabled={stepDisabled} onClick={onStep}>
-          推进一步
+          {stepTimer.running ? `推进中 ${formatDuration(stepTimer.elapsedMs)}` : '推进一步'}
         </button>
+      </div>
+      <div className="ai-step-meters" aria-live="polite">
+        <div className={`ai-step-meter${stepTimer.running ? ' is-active' : ''}`}>
+          {stepTimer.running
+            ? `手动 · 本次 ${formatDuration(stepTimer.elapsedMs)}`
+            : stepTimer.lastMs == null
+              ? '手动 · 上一步 --'
+              : `手动 · ${stepTimer.lastOk === false ? '上次失败' : '上一步'} ${formatDuration(stepTimer.lastMs)}`}
+        </div>
+        {(control.autoplay || autoTimer.running || autoTimer.lastMs != null) && (
+          <div className={`ai-step-meter${autoTimer.running ? ' is-active' : ''}`}>
+            {autoTimer.running
+              ? `自动 · 本次 ${formatDuration(autoTimer.elapsedMs)}`
+              : autoTimer.lastMs == null
+                ? '自动 · 上一步 --'
+                : `自动 · ${autoTimer.lastOk === false ? '上次中断' : '上一步'} ${formatDuration(autoTimer.lastMs)}`}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -492,9 +692,30 @@ function AiControls({
 
 function Players({ game }: { game: FullGame }) {
   const { board, state } = game;
+  const prevResourcesRef = useRef<Record<number, ResMap>>(
+    Object.fromEntries(state.players.map((p) => [p.id, { ...p.resources }])) as Record<
+      number,
+      ResMap
+    >,
+  );
+  const [resourceGlow, setResourceGlow] = useState<Record<number, Resource[]>>({});
+
+  useEffect(() => {
+    const nextGlow: Record<number, Resource[]> = {};
+    for (const p of state.players) {
+      const prev = prevResourcesRef.current[p.id];
+      const gained = prev ? RESOURCES.filter((r) => p.resources[r] > prev[r]) : [];
+      if (gained.length > 0) nextGlow[p.id] = gained;
+      prevResourcesRef.current[p.id] = { ...p.resources };
+    }
+    if (Object.keys(nextGlow).length === 0) return;
+    setResourceGlow(nextGlow);
+    const t = setTimeout(() => setResourceGlow({}), 650);
+    return () => clearTimeout(t);
+  }, [state.players]);
+
   return (
-    <div className="card">
-      <h2>玩家</h2>
+    <div className="card card-plain">
       <div className="players-grid">
         {state.players.map((pl) => {
           const vp = pl.isAI ? publicVP(state, pl.id) : totalVP(state, pl.id);
@@ -507,12 +728,12 @@ function Players({ game }: { game: FullGame }) {
               <div className="player-head">
                 <span className="player-dot" style={{ background: pl.color }} />
                 <span className="player-name">{pl.name}</span>
-                <span className="player-vp">
-                  {vp}
-                  <span>分</span>
-                </span>
               </div>
               <div className="player-stats">
+                <span className="player-stat-vp">
+                  <b>{vp}</b>
+                  分
+                </span>
                 <span>
                   <b>{handSize(pl)}</b>
                   手牌
@@ -530,6 +751,18 @@ function Players({ game }: { game: FullGame }) {
                 {state.longestRoad.player === pl.id && <span className="badge">最长路</span>}
                 {state.largestArmy.player === pl.id && <span className="badge">最大军队</span>}
                 {pl.knightsPlayed > 0 && <span className="badge">骑士 {pl.knightsPlayed}</span>}
+              </div>
+              <div className="player-resources">
+                {RESOURCES.map((r) => (
+                  <span
+                    key={r}
+                    className={`player-res${resourceGlow[pl.id]?.includes(r) ? ' gain' : ''}`}
+                    title={`${RESOURCE_LABEL[r]} ${pl.resources[r]}`}
+                  >
+                    <span className="player-res-key">{r}</span>
+                    <b>{pl.resources[r]}</b>
+                  </span>
+                ))}
               </div>
             </div>
           );
@@ -559,63 +792,8 @@ function Phase({
   const me = human ?? state.players[HUMAN];
   const isHumanTurn = state.players[state.current]?.isAI === false;
 
-  // 资源增加时脉冲高亮
-  const prevRes = useRef<ResMap>({ ...me.resources });
-  const [glow, setGlow] = useState<Resource[]>([]);
-  useEffect(() => {
-    const gained = RESOURCES.filter((r) => me.resources[r] > prevRes.current[r]);
-    prevRes.current = { ...me.resources };
-    if (gained.length === 0) return;
-    setGlow(gained);
-    const t = setTimeout(() => setGlow([]), 650);
-    return () => clearTimeout(t);
-  }, [
-    me.resources.木,
-    me.resources.砖,
-    me.resources.羊,
-    me.resources.麦,
-    me.resources.矿,
-  ]);
-
-  // 等待 AI
-  const aiActing =
-    !isHumanTurn &&
-    state.phase !== 'gameOver' &&
-    !(human && state.phase === 'discard' && state.discardLeft[human.id] != null) &&
-    !(human && state.pendingTrade && state.pendingTrade.to === human.id);
-
   return (
     <>
-      {/* 自己的资源 */}
-      <div className="card">
-        <h2>{human ? '我的资源' : `${me.name} 资源`}</h2>
-        <div className="res-bar">
-          {RESOURCES.map((r) => (
-            <span key={r} className={`res-pill${glow.includes(r) ? ' gain' : ''}`}>
-              <ResIcon r={r} />
-              {me.resources[r]}
-            </span>
-          ))}
-        </div>
-      </div>
-
-      {state.dice && (
-        <div className="card">
-          <h2>骰子</h2>
-          <div className="dice">
-            <Die key={`d1-${state.turn}-${state.dice[0]}-${state.dice[1]}`} v={state.dice[0]} />
-            <Die key={`d2-${state.turn}-${state.dice[0]}-${state.dice[1]}`} v={state.dice[1]} />
-            <span className="dice-sum">= {state.dice[0] + state.dice[1]}</span>
-          </div>
-        </div>
-      )}
-
-      {aiActing && (
-        <div className="hint">
-          {human ? 'AI 正在行动中…' : `${state.players[state.current].name} 等待控制面板推进…`}
-        </div>
-      )}
-
       {/* 弃牌（玩家） */}
       {human && state.phase === 'discard' && state.discardLeft[human.id] != null && (
         <DiscardPanel state={state} dispatch={dispatch} />
@@ -1149,7 +1327,53 @@ function ModelContextPanel({ context }: { context: AiModelContextEvent }) {
   );
 }
 
-function ThoughtLog({
+function SidebarEventPanel({
+  activeTab,
+  onTabChange,
+  thoughtItems,
+  players,
+  state,
+}: {
+  activeTab: SidebarEventTab;
+  onTabChange: (tab: SidebarEventTab) => void;
+  thoughtItems: ThoughtLogItem[];
+  players: FullGame['state']['players'];
+  state: FullGame['state'];
+}) {
+  return (
+    <div className="card card-plain sidebar-event-panel">
+      <div className="sidebar-tabs" role="tablist" aria-label="AI 思考流与对局日志">
+        <button
+          type="button"
+          className={activeTab === 'thoughts' ? 'active' : ''}
+          role="tab"
+          aria-selected={activeTab === 'thoughts'}
+          onClick={() => onTabChange('thoughts')}
+        >
+          AI 思考流
+        </button>
+        <button
+          type="button"
+          className={activeTab === 'log' ? 'active' : ''}
+          role="tab"
+          aria-selected={activeTab === 'log'}
+          onClick={() => onTabChange('log')}
+        >
+          对局日志
+        </button>
+      </div>
+      <div className="sidebar-tab-body">
+        {activeTab === 'thoughts' ? (
+          <ThoughtLogContent items={thoughtItems} players={players} />
+        ) : (
+          <LogContent state={state} />
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ThoughtLogContent({
   items,
   players,
 }: {
@@ -1158,8 +1382,7 @@ function ThoughtLog({
 }) {
   const reversed = [...items].slice(-50).reverse();
   return (
-    <div className="card">
-      <h2>AI 思考流</h2>
+    <>
       {reversed.length === 0 ? (
         <p className="cost">等待 AI 行动…</p>
       ) : (
@@ -1212,26 +1435,23 @@ function ThoughtLog({
           })}
         </div>
       )}
-    </div>
+    </>
   );
 }
 
 // ---------- 日志 ----------
 
-function Log({ state }: { state: FullGame['state'] }) {
+function LogContent({ state }: { state: FullGame['state'] }) {
   return (
-    <div className="card">
-      <h2>对局日志</h2>
-      <div className="log">
-        {state.log
-          .slice(-60)
-          .reverse()
-          .map((l, i) => (
-            <div key={i} className={l.turnMark ? 'turn-mark' : undefined}>
-              {l.text}
-            </div>
-          ))}
-      </div>
+    <div className="log">
+      {state.log
+        .slice(-60)
+        .reverse()
+        .map((l, i) => (
+          <div key={i} className={l.turnMark ? 'turn-mark' : undefined}>
+            {l.text}
+          </div>
+        ))}
     </div>
   );
 }
