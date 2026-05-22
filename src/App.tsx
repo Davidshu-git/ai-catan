@@ -369,7 +369,12 @@ export function App() {
   }, []);
 
   const stepAi = useCallback(() => {
-    aiStepAckedRef.current = false;
+    // 乐观置位：服务端 step_ai 是「先广播 ai_control_state(queued=true) 再回 ack」。
+    // 若等 ack 回调才置 acked，那条先到的 queued=true 控制事件会被 onAiControl 的
+    // `if (!aiStepAckedRef.current) return` 漏掉 → aiStepSawWorkRef 永不置上。
+    // 普通动作步靠 ai_thought 兜底结束计时，但纯交易谈判步只发 trade_chat_*、不发 ai_thought，
+    // 于是计时永不结束、单步按钮一直 disabled。提前置 acked 即可让 queued=true 被正确捕获。
+    aiStepAckedRef.current = true;
     aiStepSawWorkRef.current = false;
     setAiStepTimer((timer) => ({
       running: true,
@@ -382,12 +387,14 @@ export function App() {
       .timeout(2000)
       .emit('step_ai', (err: Error | null, res?: { ok: boolean; reason?: string }) => {
         if (err || !res || !res.ok) {
+          aiStepAckedRef.current = false;
+          aiStepSawWorkRef.current = false;
           finishAiStepTimer(false);
           setToast(res?.reason ?? 'AI 暂时无法推进');
           setTimeout(() => setToast(null), 2200);
           return;
         }
-        aiStepAckedRef.current = true;
+        // 成功：acked 已乐观置位，无需再动
       });
   }, [finishAiStepTimer]);
 
