@@ -519,6 +519,7 @@ function scheduleAI(
 
     // 应用新状态并广播
     const commitStartedAt = Date.now();
+    const prevPhase = game.state.phase;
     session.game = { board: game.board, state: outcome.nextState };
     session.version++;
     broadcastState(io, roomId);
@@ -534,6 +535,18 @@ function scheduleAI(
         session,
         withScheduleTiming(outcome.thought, scheduledAt, stepStartedAt, commitMs),
       );
+    }
+
+    // 开局选点（setup1/setup2）全部完成、刚进入正式回合（roll）时，自动暂停 autoplay：
+    // 让观察者先审视各家初始布局，再手动点继续。setup→非 setup 每局只发生一次，故只触发一次。
+    const setupJustFinished =
+      (prevPhase === 'setup1' || prevPhase === 'setup2') &&
+      outcome.nextState.phase !== 'setup1' &&
+      outcome.nextState.phase !== 'setup2';
+    if (setupJustFinished && session.aiAutoplay) {
+      session.aiAutoplay = false;
+      emitAiControl(io, roomId, session);
+      return;
     }
 
     emitAiControl(io, roomId, session);
