@@ -10,6 +10,19 @@ import { emptyRes } from './types';
 // 因此放在 shared 层；前端 art/theme.ts 直接从这里 re-export，避免双写。
 export const PLAYER_ART_COLORS = ['#a83836', '#3e668f', '#526b3b', '#a06a32'];
 
+// 玩家颜色字样：与 PLAYER_ART_COLORS 一一对应（红/蓝/绿/橙）。AI 玩家 name 为空串时用作显示标签，
+// 前端 UI、后端交易 prompt 共用，避免多处硬编码。
+export const PLAYER_COLOR_NAMES = ['红', '蓝', '绿', '橙'];
+
+/**
+ * 玩家显示名：有自定义名就用名（如 human0 模式下的"你"），AI 空名回退到颜色字样。
+ * 前后端 + LLM prompt 的唯一来源，避免空串到处塌成空白 / 孤零零的分隔符。
+ */
+export function playerDisplayName(players: Pick<Player, 'name'>[], id: number): string {
+  const name = players[id]?.name?.trim();
+  return name ? name : (PLAYER_COLOR_NAMES[id] ?? `玩家${id}`);
+}
+
 const PLAYER_DEFS = [
   { name: '你', color: PLAYER_ART_COLORS[0], isAI: false },
   { name: '', color: PLAYER_ART_COLORS[1], isAI: true },

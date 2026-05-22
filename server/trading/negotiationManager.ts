@@ -23,6 +23,7 @@ import {
   handSize,
   publicVP,
 } from '../../shared/rules';
+import { playerDisplayName } from '../../shared/state';
 import type {
   TradeChatClosedEvent,
   TradeChatMessageEvent,
@@ -101,6 +102,7 @@ export type TradeProposeMessageFn = (
   initiatorId: number,
   planLabel: string,
   offer: TradeOfferEvent,
+  participants: number[],
   fallback: string,
   agent?: AgentPromptContext,
 ) => Promise<TradeProposeOutput>;
@@ -188,6 +190,7 @@ export async function maybeRunAiNegotiation(
     initiator,
     candidate.planLabel,
     candidate.offer,
+    candidate.participants,
     fallbackPropose,
     getAgent(initiator),
   );
@@ -566,7 +569,7 @@ function pairKey(a: number, b: number): string {
 }
 
 function playerName(state: GameState, player: number): string {
-  return state.players[player]?.name ?? `玩家${player}`;
+  return playerDisplayName(state.players, player);
 }
 
 function resStr(m: ResMap): string {

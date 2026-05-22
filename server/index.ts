@@ -420,10 +420,10 @@ function scheduleAI(
       );
     };
 
-    const tradeProposeMessage: TradeProposeMessageFn = (initiatorId, planLabel, offer, fallback, agent) => {
+    const tradeProposeMessage: TradeProposeMessageFn = (initiatorId, planLabel, offer, participants, fallback, agent) => {
       const agentRuntime = session.agents[initiatorId];
       const providerName = agentRuntime?.providerName ?? session.aiProvider;
-      return generateProposeMessage({ state: game.state, initiatorId, planLabel, offer, agent }, providerName, fallback);
+      return generateProposeMessage({ state: game.state, initiatorId, planLabel, offer, participants, agent }, providerName, fallback);
     };
 
     const getAgent = (playerId: number) => {

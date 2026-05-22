@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { io, type Socket } from 'socket.io-client';
 import { Board, type BoardMode } from './components/Board';
+import { playerDisplayName } from '../shared/state';
 import { robberCandidates, type Action } from '../shared/reducer';
 import type {
   AiControlState,
@@ -1604,7 +1605,8 @@ function tradeStatusLabel(status: TradeChatClosedEvent['status']): string {
 
 function playerLabel(players: FullGame['state']['players'], id: number | null): string {
   if (id == null) return '所有参与者';
-  return players[id]?.name ?? `玩家${id}`;
+  // AI 玩家 name 为空串，回退到颜色字样（红蓝绿橙）；逻辑收敛在 shared 的 playerDisplayName
+  return playerDisplayName(players, id);
 }
 
 function ResList({ res }: { res: ResMap }) {
@@ -1708,8 +1710,16 @@ function TradeLogContent({
         const statusClass = closed ? ` is-${closed.status}` : ' is-open';
         const lastLimits =
           closed?.limits ?? session.messages[session.messages.length - 1]?.limits ?? started?.limits;
+        // 左侧竖线用本回合发起交易玩家（initiator）的颜色；缺 started 时回退到首位发言玩家
+        const initiatorId =
+          started?.initiator ?? session.messages.find((m) => m.speaker != null)?.speaker ?? null;
+        const initiatorColor = initiatorId != null ? players[initiatorId]?.color : undefined;
         return (
-          <div key={session.sessionId} className={`trade-session${statusClass}`}>
+          <div
+            key={session.sessionId}
+            className={`trade-session${statusClass}`}
+            style={initiatorColor ? { borderLeftColor: initiatorColor } : undefined}
+          >
             <div className="trade-session-head">
               <span className="trade-session-title">
                 第 {started?.turn ?? closed?.turn ?? '?'} 回合

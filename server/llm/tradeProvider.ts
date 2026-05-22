@@ -10,6 +10,7 @@
 import { aiAcceptsTrade } from '../../shared/ai';
 import type { Board, GameState, ResMap, Resource } from '../../shared/types';
 import { RESOURCES, COSTS } from '../../shared/types';
+import { playerDisplayName } from '../../shared/state';
 import { publicVP, tradeRatio, handSize } from '../../shared/rules';
 import type {
   TradeOfferEvent,
@@ -38,16 +39,21 @@ const TRADE_TEMPERATURE = Number(process.env.LLM_TEMPERATURE ?? 0.6);
 
 // ---------- 上下文工具 ----------
 
-/** 竞争态势：各玩家公开分一行概览 */
+/** 玩家显示名（红/蓝/绿/橙）：AI 空名时用颜色字样，让 LLM 能区分各家 */
+function pname(state: GameState, id: number): string {
+  return playerDisplayName(state.players, id);
+}
+
+/** 竞争态势：各玩家公开分一行概览，带红蓝绿橙区分 */
 function competitionLine(state: GameState, myId: number): string {
   const myVP = publicVP(state, myId);
   const others = state.players
     .filter((p) => p.id !== myId)
-    .map((p) => `${p.name}${publicVP(state, p.id)}分`)
+    .map((p) => `${pname(state, p.id)}${publicVP(state, p.id)}分`)
     .join(' / ');
   const leading = Math.max(...state.players.map((p) => publicVP(state, p.id)));
   const suffix = myVP < leading ? `（当前最高${leading}分，你落后${leading - myVP}分）` : '（你当前领先）';
-  return `得分：你${myVP}分 | 对手：${others}${suffix}`;
+  return `得分：你=${pname(state, myId)}${myVP}分 | 对手：${others}${suffix}`;
 }
 
 /** 我的建造目标：列出 1-2 个差 1-2 种资源就能完成的计划 */
@@ -115,6 +121,8 @@ export interface TradeProposeInput {
   initiatorId: number;
   planLabel: string;
   offer: TradeOfferEvent;
+  /** 这笔报价面向的参与方（按意愿度排序），用于在开场白 prompt 里写明交易对象 */
+  participants?: number[];
   agent?: AgentPromptContext;
 }
 
@@ -195,11 +203,14 @@ function buildRespondUserMessage(input: TradeResponseInput): string {
     parts.push('');
   }
 
+  // 身份与对手：明确"我是谁"和"在跟谁交易"
+  parts.push(`你的身份：${pname(state, responderId)}（正在回应 ${pname(state, offer.from)} 的报价）`);
+
   // 竞争态势
   parts.push(competitionLine(state, responderId));
 
   // 我的资源与手牌
-  parts.push(`你（${me.name}）的资源：${resStr(me.resources as ResMap)}`);
+  parts.push(`你（${pname(state, responderId)}）的资源：${resStr(me.resources as ResMap)}`);
   const hand = handSize(me);
   if (hand > 7) parts.push(`⚠ 手牌 ${hand} 张，若有人掷 7 需弃 ${Math.floor(hand / 2)} 张`);
 
@@ -210,10 +221,11 @@ function buildRespondUserMessage(input: TradeResponseInput): string {
   // 发起方信息（对手状态）
   const initVP = publicVP(state, offer.from);
   const initHand = handSize(initiator);
-  parts.push(`报价方 ${initiator.name}：${initVP}分，手牌${initHand}张`);
+  parts.push(`报价方 ${pname(state, offer.from)}：${initVP}分，手牌${initHand}张`);
   parts.push('');
 
-  parts.push(`${initiator.name} 向你报价：`);
+  parts.push(`本次交易：${pname(state, offer.from)} → 你（${pname(state, responderId)}）`);
+  parts.push(`${pname(state, offer.from)} 向你报价：`);
   parts.push(`  对方给你：${resStr(offer.give)}`);
   parts.push(`  你需要给出：${resStr(offer.receive)}`);
 
@@ -228,8 +240,7 @@ function buildRespondUserMessage(input: TradeResponseInput): string {
   if (history.length > 0) {
     parts.push('本轮对话历史：');
     for (const msg of history.slice(-4)) {
-      const name =
-        msg.speaker == null ? '系统' : state.players[msg.speaker]?.name ?? `玩家${msg.speaker}`;
+      const name = msg.speaker == null ? '系统' : pname(state, msg.speaker);
       parts.push(`  [${name}/${msg.decision}] ${msg.message}`);
     }
     parts.push('');
@@ -249,7 +260,7 @@ function buildRespondUserMessage(input: TradeResponseInput): string {
 }
 
 function buildProposeUserMessage(input: TradeProposeInput): string {
-  const { state, initiatorId, planLabel, offer, agent } = input;
+  const { state, initiatorId, planLabel, offer, participants, agent } = input;
   const me = state.players[initiatorId];
   const parts: string[] = [];
 
@@ -260,11 +271,14 @@ function buildProposeUserMessage(input: TradeProposeInput): string {
     parts.push('');
   }
 
+  // 身份
+  parts.push(`你的身份：${pname(state, initiatorId)}`);
+
   // 竞争态势
   parts.push(competitionLine(state, initiatorId));
 
   // 我的状态
-  parts.push(`你（${me.name}）的资源：${resStr(me.resources as ResMap)}`);
+  parts.push(`你（${pname(state, initiatorId)}）的资源：${resStr(me.resources as ResMap)}`);
   parts.push(`你正在追求：${planLabel}`);
 
   // 建造目标（帮 LLM 说清楚为什么想要这个资源）
@@ -273,6 +287,9 @@ function buildProposeUserMessage(input: TradeProposeInput): string {
   parts.push('');
 
   parts.push('你发起的报价：');
+  if (participants && participants.length > 0) {
+    parts.push(`  交易对象：${participants.map((id) => pname(state, id)).join('、')}`);
+  }
   parts.push(`  你给出：${resStr(offer.give)}`);
   parts.push(`  你想换：${resStr(offer.receive)}`);
   parts.push('');
