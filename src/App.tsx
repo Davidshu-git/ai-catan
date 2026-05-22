@@ -497,9 +497,20 @@ export function App() {
     };
   }, [finishAiAutoTimer, finishAiStepTimer, startAiAutoTimer]);
 
-  // new_game 时本地也清掉历史思考日志（server 同步会再补当前 buffer）
+  // 识别"新局"：以 gameId 变化为准清空思考流 / 谈判流。
+  // 比"turn/phase/setupIndex 归零"的旧启发更稳——对所有客户端一致，
+  // 也能覆盖"从开局相同局面重开"这种状态特征不变的情况。
+  const prevGameIdRef = useRef<string | null>(null);
   useEffect(() => {
-    if (game && game.state.turn === 0 && game.state.phase === 'setup1' && game.state.setupIndex === 0) {
+    const gid = game?.state.gameId ?? null;
+    if (gid == null) return;
+    if (prevGameIdRef.current == null) {
+      // 首次拿到状态：记基线、不清空（保留服务端连接时补拉的历史 buffer）
+      prevGameIdRef.current = gid;
+      return;
+    }
+    if (prevGameIdRef.current !== gid) {
+      prevGameIdRef.current = gid;
       setThoughtLog([]);
       setTradeLog([]);
       setAiFocus(null);
@@ -509,7 +520,7 @@ export function App() {
       setAiStepTimer(EMPTY_AI_STEP_TIMER);
       setAiAutoTimer(EMPTY_AI_STEP_TIMER);
     }
-  }, [game?.state.turn, game?.state.phase, game?.state.setupIndex]);
+  }, [game?.state.gameId]);
 
   // AI 动作高亮只短暂停留，避免遮挡后续人工操作。
   useEffect(() => {

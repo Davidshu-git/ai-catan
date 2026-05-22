@@ -70,6 +70,7 @@ export function createGame(): FullGame {
   const setupOrder = [...order, ...order.slice().reverse()];
 
   const state: GameState = {
+    gameId: `g-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
     players,
     current: setupOrder[0],
     phase: 'setup1',

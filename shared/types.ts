@@ -110,6 +110,8 @@ export interface TradeOffer {
 }
 
 export interface GameState {
+  /** 本局唯一 id，每次 createGame 生成；前端据此识别"新局"并清空思考流/谈判流（多端一致） */
+  gameId: string;
   players: Player[];
   current: number;
   phase: Phase;
