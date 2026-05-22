@@ -47,8 +47,14 @@ import {
   type TradeEventEntry,
   type TradeDecideFn,
   type TradeProposeMessageFn,
+  type TradeInitiateFn,
 } from './trading/negotiationManager';
-import { decideTradeResponse, generateProposeMessage, buildCounterCandidates } from './llm/tradeProvider';
+import {
+  decideTradeResponse,
+  generateProposeMessage,
+  decideTradeInitiation,
+  buildCounterCandidates,
+} from './llm/tradeProvider';
 
 const PORT = Number(process.env.PORT ?? 3001);
 const AI_TICK_MS = Number(process.env.AI_TICK_MS ?? 460); // 每步 AI 之间的节奏
@@ -426,6 +432,12 @@ function scheduleAI(
       return generateProposeMessage({ state: game.state, initiatorId, planLabel, offer, participants, agent }, providerName, fallback);
     };
 
+    const tradeInitiate: TradeInitiateFn = (initiatorId, board, state, sessionsRemaining, agent, feedback) => {
+      const agentRuntime = session.agents[initiatorId];
+      const providerName = agentRuntime?.providerName ?? session.aiProvider;
+      return decideTradeInitiation({ board, state, initiatorId, sessionsRemaining, agent }, providerName, feedback);
+    };
+
     const getAgent = (playerId: number) => {
       const rt = session.agents[playerId];
       return rt ? toAgentPromptContext(rt) : undefined;
@@ -437,6 +449,7 @@ function scheduleAI(
       session.tradeLedger,
       tradeDecide,
       tradeProposeMessage,
+      tradeInitiate,
       getAgent,
       (entry) => emitTradeEvent(io, roomId, session, entry), // 实时推送，每条消息生成后立即 emit
     );

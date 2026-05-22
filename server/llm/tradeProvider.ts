@@ -9,7 +9,7 @@
 
 import { aiAcceptsTrade } from '../../shared/ai';
 import type { Board, GameState, ResMap, Resource } from '../../shared/types';
-import { RESOURCES, COSTS } from '../../shared/types';
+import { RESOURCES, COSTS, emptyRes } from '../../shared/types';
 import { playerDisplayName } from '../../shared/state';
 import { publicVP, tradeRatio, handSize } from '../../shared/rules';
 import type {
@@ -133,6 +133,29 @@ export interface TradeProposeOutput {
   provider?: string;
 }
 
+export interface TradeInitiationInput {
+  board: Board;
+  state: GameState;
+  initiatorId: number;
+  /** 本回合剩余可发起交易次数（含本次） */
+  sessionsRemaining: number;
+  agent?: AgentPromptContext;
+}
+
+export interface TradeInitiationOutput {
+  /** 是否发起交易 */
+  initiate: boolean;
+  /** 发起方给出的资源（自由构造，由 negotiationManager 二次校验） */
+  give: ResMap;
+  /** 发起方想换到的资源 */
+  receive: ResMap;
+  /** 开场白（initiate=true 时用作 PROPOSE 文案） */
+  message?: string;
+  modelContext?: AiModelContextEvent;
+  rawOutput?: string;
+  provider?: string;
+}
+
 // ---------- 格式化工具 ----------
 
 function resStr(m: ResMap): string {
@@ -172,11 +195,17 @@ export function buildCounterCandidates(
 
 const RESPOND_SYSTEM = `你是卡坦岛交易谈判 AI，正在替一名玩家回应一个资源交换报价。
 
+对局规则与限制：
+- 牌局先到 10 分（含隐藏胜利点卡）者获胜；你只看得到对手的公开分，其真实分可能更高。
+- 你看不到对手的具体手牌种类，只知道手牌总数。
+- 反资敌：别接受会让对方（尤其公开分领先你、或已接近 10 分获胜的对手）完成关键建造或抢分的交易，哪怕你能拿到想要的资源。
+- 这单交易最多再还价 1 次，还价被拒就作废——能直接推进你自己建造目标的成交，别为多要 1 张资源而让它告吹。
+
 铁律：
 1. 输出必须是严格 JSON：{"decision":"ACCEPT"|"REJECT"|"COUNTER_OFFER","counterId":"（仅还价时填）","message":"1-2句中文"}
 2. COUNTER_OFFER 时必须从 counterCandidates 里选一个 id 填入 counterId；列表为空时禁止还价
-3. 接受条件：接受后能立即推进某建造目标，或你给出的是纯余量资源
-4. 拒绝条件：你正好需要那份资源，或对方明显占便宜
+3. 接受条件：接受后能立即推进某建造目标、或你给出的是纯余量资源，且这笔不会明显资敌
+4. 拒绝条件：你正好需要那份资源、对方明显占便宜，或这笔会帮到领先/快赢的对手
 5. message 用第一人称，1-2句，带点你的角色个性，别客套
 6. 只输出 JSON，不要代码块或其他文字`;
 
@@ -187,6 +216,20 @@ const PROPOSE_SYSTEM = `你是卡坦岛交易谈判 AI，正在替一名玩家�
 2. 说明你想用什么换什么，以及为什么这对双方有利
 3. 第一人称，带角色个性，简洁有力，不要客套话
 4. 只输出 JSON，不要代码块或其他文字`;
+
+const INITIATE_SYSTEM = `你是卡坦岛交易发起 AI，正在替一名玩家决定「此刻要不要向其他 AI 发起一笔资源交易，以及报什么价」。
+
+对局规则与限制：
+1. 牌局先到 10 分（含隐藏胜利点卡）者获胜。交易只能交换资源（木/砖/羊/麦/矿），不能换分数、地块或发展卡。
+2. 报价 = 你给出 give + 你想换 receive，不必 1:1：紧缺且自己难产的资源值得用 2 换 1 甚至更高。但 give 只能用你真正拥有的资源，give 总量不要超过 4 张；give 与 receive 不能含同一种资源。
+3. 结构限制：你本回合最多发起 2 次交易（看输入里的 sessionsRemaining 还剩几次）；单次谈判最多 8 条发言、最多 1 次还价、每人最多回 2 次。发起次数有限，别为蝇头小利浪费机会。
+4. 反资敌：你看不到对手的具体手牌（只知总数）。别送出会让对手完成关键建造、抢分或逼近 10 分获胜的资源；对公开分领先你的对手尤其谨慎。
+5. 自己判断时机：只在交易确实能推进你的建造目标、或换到当前紧缺且银行兑换又太亏的资源时才发起；否则 initiate=false，把发起机会留给更值的时刻。能用银行港口比率（输入里给了）自力更生时就别开口求人。
+
+输出严格 JSON：{"initiate":true,"give":{"麦":2},"receive":{"矿":1},"message":"1-2句中文开场白，说清想换什么、为什么"}
+- initiate=false 时 give/receive 给空对象 {}，message 可留空
+- give/receive 用资源名做 key、数量（正整数）做 value，只列数量>0 的项
+- 只输出 JSON，不要代码块或其他文字`;
 
 function buildRespondUserMessage(input: TradeResponseInput): string {
   const { board, state, responderId, offer, history, counterCandidates, agent } = input;
@@ -294,6 +337,54 @@ function buildProposeUserMessage(input: TradeProposeInput): string {
   parts.push(`  你想换：${resStr(offer.receive)}`);
   parts.push('');
   parts.push('生成一句简洁有力的交易开场白 JSON：');
+  return parts.join('\n');
+}
+
+function buildInitiateUserMessage(input: TradeInitiationInput, feedback?: string): string {
+  const { board, state, initiatorId, sessionsRemaining, agent } = input;
+  const me = state.players[initiatorId];
+  const parts: string[] = [];
+
+  if (agent) {
+    parts.push(`你的角色：${agent.name}（${agent.personality}）`);
+    if (agent.currentTurnGoal) parts.push(`本回合目标：${agent.currentTurnGoal}`);
+    if (agent.stance) parts.push(`当前策略：${agent.stance}`);
+    parts.push('');
+  }
+
+  parts.push(`你的身份：${pname(state, initiatorId)}`);
+  parts.push(competitionLine(state, initiatorId));
+  parts.push(`你的资源：${resStr(me.resources as ResMap)}（手牌${handSize(me)}张）`);
+
+  const goals = myNearGoals(state, initiatorId);
+  if (goals) parts.push(goals);
+
+  // 银行替代方案：让模型判断"自力更生 vs 求人"
+  const ratios = RESOURCES.map((r) => `${r}=${tradeRatio(board, state, initiatorId, r)}:1`).join(' ');
+  parts.push(`银行/港口兑换比率：${ratios}`);
+  parts.push('');
+
+  // 其他玩家概览（反资敌判断；手牌种类不可见）
+  parts.push('其他玩家（只知公开分与手牌总数，看不到具体手牌）：');
+  for (const p of state.players) {
+    if (p.id === initiatorId) continue;
+    const tag = p.isAI ? '' : '（人类）';
+    parts.push(`  ${pname(state, p.id)}${tag}：${publicVP(state, p.id)}分，手牌${handSize(p)}张`);
+  }
+  parts.push('');
+
+  parts.push(
+    `本回合还可发起交易：${sessionsRemaining} 次（上限 2）。单次谈判：最多 8 条发言、最多 1 次还价、每人最多回 2 次。`,
+  );
+
+  if (feedback) {
+    parts.push('');
+    parts.push(`【上次报价不合规】${feedback}`);
+    parts.push('请修正后重新输出 JSON（或 initiate=false 放弃发起）。');
+  }
+
+  parts.push('');
+  parts.push('决定是否发起交易并给出报价，输出 JSON：');
   return parts.join('\n');
 }
 
@@ -416,6 +507,19 @@ function extractJson(raw: string): unknown {
   throw new Error('JSON 解析失败：' + raw.slice(0, 200));
 }
 
+/** 把模型输出的 give/receive 解析成干净的 ResMap：只收 5 种资源、正整数 */
+function parseResMap(v: unknown): ResMap {
+  const out = emptyRes();
+  if (v && typeof v === 'object') {
+    const obj = v as Record<string, unknown>;
+    for (const r of RESOURCES) {
+      const n = obj[r];
+      if (typeof n === 'number' && Number.isFinite(n) && n > 0) out[r] = Math.floor(n);
+    }
+  }
+  return out;
+}
+
 // ---------- 规则 fallback ----------
 
 function ruleTradeResponse(input: TradeResponseInput): TradeResponseOutput {
@@ -526,6 +630,50 @@ export async function decideTradeResponse(
     console.warn(`[trade-llm] ${providerName} 失败，走规则 fallback：${(err as Error).message}`);
     const ruled = ruleTradeResponse(input);
     return { ...ruled, modelContext, rawOutput: `[LLM 调用失败] ${(err as Error).message}`, provider: providerLbl };
+  }
+}
+
+/**
+ * 发起方决定是否发起交易 + 自由构造报价（give/receive）。
+ * 非 LLM provider（rule/mock）返回 initiate:false，让 negotiationManager 走规则候选兜底。
+ * 报价的合法性（拥有/非空/不自换/总量上限/有对手能兑现/dry-run）由 negotiationManager 二次校验。
+ */
+export async function decideTradeInitiation(
+  input: TradeInitiationInput,
+  providerName: string,
+  feedback?: string,
+): Promise<TradeInitiationOutput> {
+  const isLlm = providerName === 'minimax' || providerName === 'qwen36';
+  if (!isLlm) return { initiate: false, give: emptyRes(), receive: emptyRes() };
+
+  const user = buildInitiateUserMessage(input, feedback);
+  const providerLbl = providerLabel(providerName);
+  const modelContext = buildTradeModelContext(providerLbl, INITIATE_SYSTEM, user);
+
+  try {
+    const raw = await callLlm(providerName, INITIATE_SYSTEM, user);
+    const parsed = extractJson(raw) as Record<string, unknown>;
+    const initiate = parsed.initiate === true;
+    const message = typeof parsed.message === 'string' ? parsed.message.trim() : '';
+    return {
+      initiate,
+      give: parseResMap(parsed.give),
+      receive: parseResMap(parsed.receive),
+      message: message || undefined,
+      modelContext,
+      rawOutput: raw,
+      provider: providerLbl,
+    };
+  } catch (err) {
+    console.warn(`[trade-llm] 发起决策失败，跳过 LLM 发起：${(err as Error).message}`);
+    return {
+      initiate: false,
+      give: emptyRes(),
+      receive: emptyRes(),
+      modelContext,
+      rawOutput: `[LLM 调用失败] ${(err as Error).message}`,
+      provider: providerLbl,
+    };
   }
 }
 

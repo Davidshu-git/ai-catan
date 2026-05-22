@@ -38,6 +38,7 @@ import {
   buildCounterCandidates,
   type TradeResponseOutput,
   type TradeProposeOutput,
+  type TradeInitiationOutput,
 } from '../llm/tradeProvider';
 
 const TRADE_LIMITS = {
@@ -47,6 +48,12 @@ const TRADE_LIMITS = {
   counterOffersPerSession: 1,
   repliesPerPlayer: 2,
 };
+
+// LLM 自由报价的安全上限：give 最多 4 张（允许"高报价"换紧缺资源），receive 最多 3 张
+const MAX_GIVE_CARDS = 4;
+const MAX_RECEIVE_CARDS = 3;
+// 发起报价校验不过时，"模型可修复"类错误带反馈重试的次数（默认 1，即最多 2 次发起调用）
+const MAX_INIT_RETRIES = Number(process.env.TRADE_INIT_RETRIES ?? 1);
 
 const PLAN_PRIORITY = [
   { id: 'city', label: '升级城市', cost: COSTS.city, priority: 5 },
@@ -107,6 +114,37 @@ export type TradeProposeMessageFn = (
   agent?: AgentPromptContext,
 ) => Promise<TradeProposeOutput>;
 
+/**
+ * 注入函数：让发起方 LLM 决定是否发起交易 + 自由构造报价。
+ * 返回 initiate=false 时（含非 LLM provider）→ manager 走规则候选兜底。
+ */
+export type TradeInitiateFn = (
+  initiatorId: number,
+  board: Board,
+  state: GameState,
+  sessionsRemaining: number,
+  agent: AgentPromptContext | undefined,
+  feedback: string | undefined,
+) => Promise<TradeInitiationOutput>;
+
+/** 发起报价校验结果：ok→可用；retryable→模型可修复（带反馈重试）；否则转规则兜底 */
+type InitiationResolveResult =
+  | { ok: true; resolved: ResolvedInitiation }
+  | { ok: false; retryable: true; reason: string }
+  | { ok: false; retryable: false };
+
+/** 发起决策解析结果：LLM 自由报价与规则候选统一成这个结构后驱动会话 */
+interface ResolvedInitiation {
+  planLabel: string;
+  /** to=null 的广播报价 */
+  offer: TradeOfferEvent;
+  participants: number[];
+  offerKey: string;
+  /** LLM 路径：直接用作 PROPOSE 文案；规则路径：null（再调 tradeProposeMessage 生成） */
+  openingMessage: string | null;
+  openingMeta?: MessageMeta;
+}
+
 interface TradeCandidate {
   planLabel: string;
   need: Resource;
@@ -140,6 +178,7 @@ export async function maybeRunAiNegotiation(
   ledger: AiTradeLedger,
   tradeDecide: TradeDecideFn,
   tradeProposeMessage: TradeProposeMessageFn,
+  tradeInitiate: TradeInitiateFn,
   getAgent: (playerId: number) => AgentPromptContext | undefined,
   onEvent: (entry: TradeEventEntry) => void,
 ): Promise<AiNegotiationResult | null> {
@@ -150,9 +189,35 @@ export async function maybeRunAiNegotiation(
   ensureLedgerTurn(ledger, state);
   const usedSessions = ledger.sessionsByPlayer[initiator] ?? 0;
   if (usedSessions >= TRADE_LIMITS.sessionsPerTurn) return null;
+  const sessionsRemaining = TRADE_LIMITS.sessionsPerTurn - usedSessions;
 
-  const candidate = chooseTradeCandidate(board, state, ledger);
-  if (!candidate) return null;
+  // 优先让发起方 LLM 决定是否发起 + 自由构造报价；不发起/校验不过/规则 provider → 规则候选兜底。
+  // 校验为"模型可修复"错误（如 give 超额、自换、超上限）时，带反馈重试 MAX_INIT_RETRIES 次；
+  // "非模型可修复"错误（无可成交对手等）直接转规则兜底，不浪费 token 重试。
+  let resolved: ResolvedInitiation | null = null;
+  let feedback: string | undefined;
+  for (let attempt = 0; attempt <= MAX_INIT_RETRIES; attempt++) {
+    const init = await tradeInitiate(initiator, board, state, sessionsRemaining, getAgent(initiator), feedback);
+    if (!init.initiate) break; // 模型主动不发起 → 不重试
+    const res = resolveLlmInitiation(state, ledger, initiator, init);
+    if (res.ok) {
+      resolved = res.resolved;
+      break;
+    }
+    if (!res.retryable) break; // 非模型可修复 → 转规则兜底
+    feedback = res.reason; // 可修复 → 带反馈再试
+  }
+  if (!resolved) {
+    const candidate = chooseTradeCandidate(board, state, ledger);
+    if (!candidate) return null;
+    resolved = {
+      planLabel: candidate.planLabel,
+      offer: candidate.offer,
+      participants: candidate.participants,
+      offerKey: candidate.offerKey,
+      openingMessage: null,
+    };
+  }
 
   ledger.sessionSeq++;
   ledger.sessionsByPlayer[initiator] = usedSessions + 1;
@@ -176,45 +241,45 @@ export async function maybeRunAiNegotiation(
       turn: state.turn,
       phase: state.phase,
       initiator,
-      participants: candidate.participants,
-      proposedTrade: cloneOffer(candidate.offer),
+      participants: resolved.participants,
+      proposedTrade: cloneOffer(resolved.offer),
       limits: limits(),
       ts: Date.now(),
     },
   };
   push(startedEntry);
 
-  // 发起方生成开场白
-  const fallbackPropose = `${playerName(state, initiator)}想推进${candidate.planLabel}，愿意给出${resStr(candidate.offer.give)}换${resStr(candidate.offer.receive)}。`;
-  const proposeOut = await tradeProposeMessage(
-    initiator,
-    candidate.planLabel,
-    candidate.offer,
-    candidate.participants,
-    fallbackPropose,
-    getAgent(initiator),
-  );
-  pushMessage(
-    push,
-    sessionId,
-    state.turn,
-    counters,
-    limits,
-    initiator,
-    'PROPOSE',
-    proposeOut.message,
-    candidate.offer,
-    { modelContext: proposeOut.modelContext, rawOutput: proposeOut.rawOutput, provider: proposeOut.provider },
-  );
+  // 发起方开场白：LLM 路径直接用其决策时给的文案；规则路径再调 tradeProposeMessage
+  if (resolved.openingMessage) {
+    pushMessage(
+      push, sessionId, state.turn, counters, limits, initiator,
+      'PROPOSE', resolved.openingMessage, resolved.offer, resolved.openingMeta,
+    );
+  } else {
+    const fallbackPropose = `${playerName(state, initiator)}想推进${resolved.planLabel}，愿意给出${resStr(resolved.offer.give)}换${resStr(resolved.offer.receive)}。`;
+    const proposeOut = await tradeProposeMessage(
+      initiator,
+      resolved.planLabel,
+      resolved.offer,
+      resolved.participants,
+      fallbackPropose,
+      getAgent(initiator),
+    );
+    pushMessage(
+      push, sessionId, state.turn, counters, limits, initiator,
+      'PROPOSE', proposeOut.message, resolved.offer,
+      { modelContext: proposeOut.modelContext, rawOutput: proposeOut.rawOutput, provider: proposeOut.provider },
+    );
+  }
 
-  for (const participant of candidate.participants) {
+  for (const participant of resolved.participants) {
     if (!canSpeak(counters, participant)) continue;
 
     const directOffer: TradeOfferEvent = {
       from: initiator,
       to: participant,
-      give: cloneRes(candidate.offer.give),
-      receive: cloneRes(candidate.offer.receive),
+      give: cloneRes(resolved.offer.give),
+      receive: cloneRes(resolved.offer.receive),
     };
     const counterCandidates = buildCounterCandidates(state, directOffer);
 
@@ -284,7 +349,7 @@ export async function maybeRunAiNegotiation(
     pushMessage(push, sessionId, state.turn, counters, limits, participant, 'REJECT', resp.message, directOffer, respMeta);
   }
 
-  ledger.rejectedOfferKeys[candidate.offerKey] = true;
+  ledger.rejectedOfferKeys[resolved.offerKey] = true;
   push({
     kind: 'closed',
     data: closeEvent(sessionId, state.turn, 'rejected', '所有参与 AI 均拒绝或还价未达成', limits()),
@@ -351,6 +416,88 @@ function chooseTradeCandidate(
 
   candidates.sort((a, b) => b.score - a.score);
   return candidates[0] ?? null;
+}
+
+/**
+ * 校验并解析 LLM 自由报价。
+ * - "模型可修复"错误（give/receive 空、超上限、给了没有的、自换同种）→ retryable + reason，供带反馈重试。
+ * - "非模型可修复"错误（没有能成交的对手、同一报价本回合已被拒）→ retryable:false，转规则兜底。
+ * 校验：give/receive 非空、不含同种、give 自己拥有、总量不超上限、有能兑现 receive 的未成交 AI 对手。
+ */
+function resolveLlmInitiation(
+  state: GameState,
+  ledger: AiTradeLedger,
+  initiator: number,
+  init: TradeInitiationOutput,
+): InitiationResolveResult {
+  const give = cloneRes(init.give);
+  const receive = cloneRes(init.receive);
+  const giveTotal = RESOURCES.reduce((s, r) => s + give[r], 0);
+  const recvTotal = RESOURCES.reduce((s, r) => s + receive[r], 0);
+
+  if (giveTotal === 0 || recvTotal === 0) {
+    return { ok: false, retryable: true, reason: 'give 和 receive 都必须非空（各至少 1 张资源）。' };
+  }
+  if (giveTotal > MAX_GIVE_CARDS) {
+    return { ok: false, retryable: true, reason: `give 总量 ${giveTotal} 张超过上限 ${MAX_GIVE_CARDS} 张，请减少。` };
+  }
+  if (recvTotal > MAX_RECEIVE_CARDS) {
+    return { ok: false, retryable: true, reason: `receive 总量 ${recvTotal} 张超过上限 ${MAX_RECEIVE_CARDS} 张，请减少。` };
+  }
+  // 不能给出自己没有的资源
+  if (!hasResources(state, initiator, give)) {
+    return {
+      ok: false,
+      retryable: true,
+      reason: `give 超过你实际拥有的资源（你现有：${resStr(state.players[initiator].resources as ResMap)}）。`,
+    };
+  }
+  // give 与 receive 不能含同一种资源（自换无意义）
+  for (const r of RESOURCES) {
+    if (give[r] > 0 && receive[r] > 0) {
+      return { ok: false, retryable: true, reason: `give 和 receive 不能含同一种资源（${RESOURCE_LABEL[r]}），请换一种需求。` };
+    }
+  }
+
+  // 交易对象：能兑现 receive、本回合未与我成交过的 AI（上帝视角过滤，保证报价能真成交）
+  const offer: TradeOfferEvent = { from: initiator, to: null, give, receive };
+  const participants = state.players
+    .filter((p) => p.id !== initiator && p.isAI)
+    .filter((p) => RESOURCES.every((r) => receive[r] === 0 || p.resources[r] >= receive[r]))
+    .filter((p) => !ledger.dealsByPair[pairKey(initiator, p.id)])
+    .sort(
+      (a, b) =>
+        participantScore(state, b.id, give, receive) - participantScore(state, a.id, give, receive),
+    )
+    .map((p) => p.id);
+  // 没有能成交的对手：模型看不到对手手牌，重试也无从修复 → 转规则兜底
+  if (participants.length === 0) return { ok: false, retryable: false };
+
+  const offerKey = `llm:${initiator}:${resKey(give)}->${resKey(receive)}:${participants.join(',')}`;
+  if (ledger.rejectedOfferKeys[offerKey]) return { ok: false, retryable: false };
+
+  const opening =
+    init.message && init.message.length > 0
+      ? init.message
+      : `${playerName(state, initiator)}愿意用${resStr(give)}换${resStr(receive)}。`;
+
+  return {
+    ok: true,
+    resolved: {
+      planLabel: '资源交换',
+      offer,
+      participants,
+      offerKey,
+      openingMessage: opening,
+      openingMeta: { modelContext: init.modelContext, rawOutput: init.rawOutput, provider: init.provider },
+    },
+  };
+}
+
+function resKey(m: ResMap): string {
+  return RESOURCES.filter((r) => m[r] > 0)
+    .map((r) => `${r}${m[r]}`)
+    .join('+');
 }
 
 function planPossible(
