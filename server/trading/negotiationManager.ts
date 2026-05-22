@@ -1,11 +1,10 @@
 // ============================================================
 // AI 交易谈判管理器
 // ------------------------------------------------------------
-// 第一版只处理 AI ↔ AI：谈判状态留在 server 内存，最终成交仍然
-// dry-run + TRADE_EXECUTE，不进入 shared/state.ts 主状态机。
+// 调用 LLM（或规则 fallback）为每个参与方生成真实决策 + 自然语言消息。
+// tradeDecide 函数由 server/index.ts 按玩家注入（持有 providerName）。
 // ============================================================
 
-import { aiAcceptsTrade } from '../../shared/ai';
 import { reduce, type Action } from '../../shared/reducer';
 import {
   COSTS,
@@ -33,6 +32,12 @@ import type {
   TradeOfferEvent,
   TradeSessionStatus,
 } from '../../shared/protocol';
+import type { AgentPromptContext } from '../llm/types';
+import {
+  buildCounterCandidates,
+  type TradeResponseOutput,
+  type TradeProposeOutput,
+} from '../llm/tradeProvider';
 
 const TRADE_LIMITS = {
   sessionsPerTurn: 2,
@@ -75,6 +80,31 @@ export interface AiNegotiationResult {
   nextState: GameState | null;
 }
 
+/**
+ * 注入函数：server/index.ts 按玩家的 agent providerName 决定调用哪个 LLM。
+ * responderId: 当前做决策的玩家（发起方回应还价时 responderId = initiator）
+ */
+export type TradeDecideFn = (
+  responderId: number,
+  board: Board,
+  state: GameState,
+  offer: TradeOfferEvent,
+  history: TradeChatMessageEvent[],
+  agent?: AgentPromptContext,
+) => Promise<TradeResponseOutput>;
+
+/**
+ * 注入函数：生成发起方提议的开场白消息。
+ * 返回 message + 可选的 modelContext/rawOutput，便于前端可视化模型输入与原始输出。
+ */
+export type TradeProposeMessageFn = (
+  initiatorId: number,
+  planLabel: string,
+  offer: TradeOfferEvent,
+  fallback: string,
+  agent?: AgentPromptContext,
+) => Promise<TradeProposeOutput>;
+
 interface TradeCandidate {
   planLabel: string;
   need: Resource;
@@ -102,11 +132,15 @@ export function createAiTradeLedger(): AiTradeLedger {
   };
 }
 
-export function maybeRunAiNegotiation(
+export async function maybeRunAiNegotiation(
   board: Board,
   state: GameState,
   ledger: AiTradeLedger,
-): AiNegotiationResult | null {
+  tradeDecide: TradeDecideFn,
+  tradeProposeMessage: TradeProposeMessageFn,
+  getAgent: (playerId: number) => AgentPromptContext | undefined,
+  onEvent: (entry: TradeEventEntry) => void,
+): Promise<AiNegotiationResult | null> {
   if (state.phase !== 'main') return null;
   const initiator = state.current;
   if (!state.players[initiator]?.isAI) return null;
@@ -130,8 +164,10 @@ export function maybeRunAiNegotiation(
   };
   const events: TradeEventEntry[] = [];
   const limits = () => buildLimits(counters, ledger, initiator);
+  const history = () => events.filter((e): e is { kind: 'message'; data: TradeChatMessageEvent } => e.kind === 'message').map((e) => e.data);
+  const push = (entry: TradeEventEntry) => { events.push(entry); onEvent(entry); };
 
-  events.push({
+  const startedEntry: TradeEventEntry = {
     kind: 'started',
     data: {
       sessionId,
@@ -143,106 +179,110 @@ export function maybeRunAiNegotiation(
       limits: limits(),
       ts: Date.now(),
     },
-  });
+  };
+  push(startedEntry);
 
+  // 发起方生成开场白
+  const fallbackPropose = `${playerName(state, initiator)}想推进${candidate.planLabel}，愿意给出${resStr(candidate.offer.give)}换${resStr(candidate.offer.receive)}。`;
+  const proposeOut = await tradeProposeMessage(
+    initiator,
+    candidate.planLabel,
+    candidate.offer,
+    fallbackPropose,
+    getAgent(initiator),
+  );
   pushMessage(
-    events,
+    push,
     sessionId,
     state.turn,
     counters,
     limits,
     initiator,
     'PROPOSE',
-    `${playerName(state, initiator)}想推进${candidate.planLabel}，愿意给出${resStr(candidate.offer.give)}换${resStr(candidate.offer.receive)}。`,
+    proposeOut.message,
     candidate.offer,
+    { modelContext: proposeOut.modelContext, rawOutput: proposeOut.rawOutput, provider: proposeOut.provider },
   );
 
   for (const participant of candidate.participants) {
     if (!canSpeak(counters, participant)) continue;
-    const directTrade: TradeOfferEvent = {
+
+    const directOffer: TradeOfferEvent = {
       from: initiator,
       to: participant,
       give: cloneRes(candidate.offer.give),
       receive: cloneRes(candidate.offer.receive),
     };
+    const counterCandidates = buildCounterCandidates(state, directOffer);
 
-    if (aiAcceptsTrade(state, participant, directTrade.give, directTrade.receive)) {
-      pushMessage(
-        events,
-        sessionId,
-        state.turn,
-        counters,
-        limits,
-        participant,
-        'ACCEPT',
-        `${playerName(state, participant)}接受报价：得到${resStr(directTrade.give)}，交出${resStr(directTrade.receive)}。`,
-        directTrade,
-      );
-      return closeAccepted(board, state, ledger, events, sessionId, limits, directTrade);
-    }
-
-    const counter = buildCounterOffer(state, directTrade);
-    if (counter && counters.counterOffersUsed < TRADE_LIMITS.counterOffersPerSession) {
-      counters.counterOffersUsed++;
-      counters.offersUsed++;
-      pushMessage(
-        events,
-        sessionId,
-        state.turn,
-        counters,
-        limits,
-        participant,
-        'COUNTER_OFFER',
-        `${playerName(state, participant)}提出还价：给出${resStr(counter.give)}，要求${resStr(counter.receive)}。`,
-        counter,
-      );
-
-      if (canSpeak(counters, initiator) && aiAcceptsTrade(state, initiator, counter.give, counter.receive)) {
-        pushMessage(
-          events,
-          sessionId,
-          state.turn,
-          counters,
-          limits,
-          initiator,
-          'ACCEPT',
-          `${playerName(state, initiator)}接受还价，交易成立。`,
-          counter,
-        );
-        return closeAccepted(board, state, ledger, events, sessionId, limits, counter);
-      }
-
-      if (canSpeak(counters, initiator)) {
-        pushMessage(
-          events,
-          sessionId,
-          state.turn,
-          counters,
-          limits,
-          initiator,
-          'REJECT',
-          `${playerName(state, initiator)}拒绝还价，继续等待其他回应。`,
-          counter,
-        );
-      }
-      continue;
-    }
-
-    pushMessage(
-      events,
-      sessionId,
-      state.turn,
-      counters,
-      limits,
+    // 参与方 LLM 决策
+    const resp = await tradeDecide(
       participant,
-      'REJECT',
-      `${playerName(state, participant)}拒绝：这笔交换不会改善自己的资源结构。`,
-      directTrade,
+      board,
+      state,
+      directOffer,
+      history(),
+      getAgent(participant),
     );
+
+    const respMeta: MessageMeta = {
+      modelContext: resp.modelContext,
+      rawOutput: resp.rawOutput,
+      provider: resp.provider,
+    };
+
+    if (resp.decision === 'ACCEPT') {
+      pushMessage(push, sessionId, state.turn, counters, limits, participant, 'ACCEPT', resp.message, directOffer, respMeta);
+      return closeAccepted(board, state, ledger, push, sessionId, limits, directOffer);
+    }
+
+    if (
+      resp.decision === 'COUNTER_OFFER' &&
+      counters.counterOffersUsed < TRADE_LIMITS.counterOffersPerSession
+    ) {
+      const chosen = counterCandidates.find((c) => c.id === resp.counterId);
+      if (chosen) {
+        counters.counterOffersUsed++;
+        counters.offersUsed++;
+        const counterOffer: TradeOfferEvent = {
+          from: participant,
+          to: initiator,
+          give: cloneRes(chosen.give),
+          receive: cloneRes(chosen.receive),
+        };
+        pushMessage(push, sessionId, state.turn, counters, limits, participant, 'COUNTER_OFFER', resp.message, counterOffer, respMeta);
+
+        // 发起方回应还价（无进一步还价选项）
+        if (canSpeak(counters, initiator)) {
+          const initiatorResp = await tradeDecide(
+            initiator,
+            board,
+            state,
+            counterOffer,
+            history(),
+            getAgent(initiator),
+          );
+          const initMeta: MessageMeta = {
+            modelContext: initiatorResp.modelContext,
+            rawOutput: initiatorResp.rawOutput,
+            provider: initiatorResp.provider,
+          };
+          if (initiatorResp.decision === 'ACCEPT') {
+            pushMessage(push, sessionId, state.turn, counters, limits, initiator, 'ACCEPT', initiatorResp.message, counterOffer, initMeta);
+            return closeAccepted(board, state, ledger, push, sessionId, limits, counterOffer);
+          }
+          pushMessage(push, sessionId, state.turn, counters, limits, initiator, 'REJECT', initiatorResp.message, counterOffer, initMeta);
+        }
+        continue;
+      }
+    }
+
+    // REJECT 或 COUNTER_OFFER 解析失败
+    pushMessage(push, sessionId, state.turn, counters, limits, participant, 'REJECT', resp.message, directOffer, respMeta);
   }
 
   ledger.rejectedOfferKeys[candidate.offerKey] = true;
-  events.push({
+  push({
     kind: 'closed',
     data: closeEvent(sessionId, state.turn, 'rejected', '所有参与 AI 均拒绝或还价未达成', limits()),
   });
@@ -281,7 +321,11 @@ function chooseTradeCandidate(
       const participants = state.players
         .filter((p) => p.id !== state.current && p.isAI && p.resources[need] > 0)
         .filter((p) => !ledger.dealsByPair[pairKey(state.current, p.id)])
-        .sort((a, b) => participantScore(state, b.id, offer, receive) - participantScore(state, a.id, offer, receive))
+        .sort(
+          (a, b) =>
+            participantScore(state, b.id, offer, receive) -
+            participantScore(state, a.id, offer, receive),
+        )
         .map((p) => p.id);
       if (participants.length === 0) continue;
       const offerKey = `${state.current}:${plan.id}:${give}->${need}:${participants.join(',')}`;
@@ -291,7 +335,11 @@ function chooseTradeCandidate(
         need,
         give,
         participants,
-        score: plan.priority * 10 + participants.length + RESOURCE_WEIGHT[need] - RESOURCE_WEIGHT[give],
+        score:
+          plan.priority * 10 +
+          participants.length +
+          RESOURCE_WEIGHT[need] -
+          RESOURCE_WEIGHT[give],
         offerKey,
         offer: { from: state.current, to: null, give: offer, receive },
       });
@@ -333,12 +381,17 @@ function missingResources(resources: ResMap, cost: Partial<ResMap>): Resource[] 
 }
 
 function surplusResources(resources: ResMap, cost: Partial<ResMap>, need: Resource): Resource[] {
-  return RESOURCES.filter((r) => r !== need && resources[r] > (cost[r] ?? 0))
-    .sort((a, b) => resources[b] - (cost[b] ?? 0) - (resources[a] - (cost[a] ?? 0)));
+  return RESOURCES.filter((r) => r !== need && resources[r] > (cost[r] ?? 0)).sort(
+    (a, b) => resources[b] - (cost[b] ?? 0) - (resources[a] - (cost[a] ?? 0)),
+  );
 }
 
-function participantScore(state: GameState, player: number, gain: ResMap, loss: ResMap): number {
-  if (aiAcceptsTrade(state, player, gain, loss)) return 100;
+function participantScore(
+  state: GameState,
+  player: number,
+  gain: ResMap,
+  loss: ResMap,
+): number {
   const p = state.players[player];
   let score = 0;
   for (const r of RESOURCES) {
@@ -354,47 +407,24 @@ function resourceNeed(resources: ResMap, r: Resource): number {
   return RESOURCE_WEIGHT[r] / (1 + resources[r]);
 }
 
-function buildCounterOffer(state: GameState, directTrade: TradeOfferEvent): TradeOfferEvent | null {
-  if (directTrade.to == null) return null;
-  const initiator = directTrade.from;
-  const responder = directTrade.to;
-  const responderGive = cloneRes(directTrade.receive);
-  const baseReceive = cloneRes(directTrade.give);
-
-  for (const extra of RESOURCES) {
-    const receive = cloneRes(baseReceive);
-    receive[extra]++;
-    if (!hasResources(state, initiator, receive)) continue;
-    if (!aiAcceptsTrade(state, responder, receive, responderGive)) continue;
-    return {
-      from: responder,
-      to: initiator,
-      give: responderGive,
-      receive,
-    };
-  }
-  return null;
-}
-
 function closeAccepted(
   board: Board,
   state: GameState,
   ledger: AiTradeLedger,
-  events: TradeEventEntry[],
+  push: (e: TradeEventEntry) => void,
   sessionId: string,
   limits: () => TradeLimitsEvent,
   trade: TradeOfferEvent,
 ): AiNegotiationResult {
+  const events: TradeEventEntry[] = [];
+  const p = (e: TradeEventEntry) => { events.push(e); push(e); };
   const executed = dryRunTrade(board, state, trade);
   if (!executed) {
-    events.push({
-      kind: 'closed',
-      data: closeEvent(sessionId, state.turn, 'invalid', '成交报价未通过 TRADE_EXECUTE dry-run', limits()),
-    });
+    p({ kind: 'closed', data: closeEvent(sessionId, state.turn, 'invalid', '成交报价未通过 TRADE_EXECUTE dry-run', limits()) });
     return { events, nextState: null };
   }
   ledger.dealsByPair[pairKey(trade.from, trade.to!)] = true;
-  events.push({
+  p({
     kind: 'closed',
     data: closeEvent(
       sessionId,
@@ -424,8 +454,14 @@ function dryRunTrade(board: Board, state: GameState, trade: TradeOfferEvent): Ga
   return tradeResourceSignature(next) === before ? null : next;
 }
 
+interface MessageMeta {
+  modelContext?: TradeChatMessageEvent['modelContext'];
+  rawOutput?: string;
+  provider?: string;
+}
+
 function pushMessage(
-  events: TradeEventEntry[],
+  push: (e: TradeEventEntry) => void,
   sessionId: string,
   turn: number,
   counters: SessionCounters,
@@ -434,13 +470,14 @@ function pushMessage(
   decision: TradeDecisionEvent,
   message: string,
   offer?: TradeOfferEvent,
+  meta?: MessageMeta,
 ) {
   if (counters.messagesUsed >= TRADE_LIMITS.messagesPerSession) return;
   counters.messagesUsed++;
   if (speaker != null) {
     counters.repliesByPlayer[speaker] = (counters.repliesByPlayer[speaker] ?? 0) + 1;
   }
-  events.push({
+  push({
     kind: 'message',
     data: {
       sessionId,
@@ -450,6 +487,9 @@ function pushMessage(
       message,
       offer: offer ? cloneOffer(offer) : undefined,
       limits: limits(),
+      modelContext: meta?.modelContext,
+      rawOutput: meta?.rawOutput,
+      provider: meta?.provider,
       ts: Date.now(),
     },
   });

@@ -45,7 +45,10 @@ import {
   maybeRunAiNegotiation,
   type AiTradeLedger,
   type TradeEventEntry,
+  type TradeDecideFn,
+  type TradeProposeMessageFn,
 } from './trading/negotiationManager';
+import { decideTradeResponse, generateProposeMessage, buildCounterCandidates } from './llm/tradeProvider';
 
 const PORT = Number(process.env.PORT ?? 3001);
 const AI_TICK_MS = Number(process.env.AI_TICK_MS ?? 460); // 每步 AI 之间的节奏
@@ -283,9 +286,6 @@ function emitTradeEvent(io: Server, roomId: string, session: Session, entry: Tra
   io.to(roomId).emit(eventName, entry.data);
 }
 
-function emitTradeEvents(io: Server, roomId: string, session: Session, events: TradeEventEntry[]) {
-  for (const entry of events) emitTradeEvent(io, roomId, session, entry);
-}
 
 function rememberThought(session: Session, ev: AiThoughtEvent) {
   const agent = session.agents[ev.player];
@@ -410,9 +410,38 @@ function scheduleAI(
     }
 
     const startVersion = session.version;
-    const negotiation = maybeRunAiNegotiation(game.board, game.state, session.tradeLedger);
+
+    const tradeDecide: TradeDecideFn = (responderId, board, state, offer, history, agent) => {
+      const agentRuntime = session.agents[responderId];
+      const providerName = agentRuntime?.providerName ?? session.aiProvider;
+      return decideTradeResponse(
+        { board, state, responderId, offer, history, counterCandidates: buildCounterCandidates(state, offer), agent },
+        providerName,
+      );
+    };
+
+    const tradeProposeMessage: TradeProposeMessageFn = (initiatorId, planLabel, offer, fallback, agent) => {
+      const agentRuntime = session.agents[initiatorId];
+      const providerName = agentRuntime?.providerName ?? session.aiProvider;
+      return generateProposeMessage({ state: game.state, initiatorId, planLabel, offer, agent }, providerName, fallback);
+    };
+
+    const getAgent = (playerId: number) => {
+      const rt = session.agents[playerId];
+      return rt ? toAgentPromptContext(rt) : undefined;
+    };
+
+    const negotiation = await maybeRunAiNegotiation(
+      game.board,
+      game.state,
+      session.tradeLedger,
+      tradeDecide,
+      tradeProposeMessage,
+      getAgent,
+      (entry) => emitTradeEvent(io, roomId, session, entry), // 实时推送，每条消息生成后立即 emit
+    );
     if (negotiation) {
-      emitTradeEvents(io, roomId, session, negotiation.events);
+      // events 已在谈判过程中逐条 emit，此处只需处理成交后的状态更新
       if (negotiation.nextState) {
         session.game = { board: game.board, state: negotiation.nextState };
         session.version++;
@@ -674,10 +703,19 @@ io.on('connection', (socket: Socket) => {
       clearTimeout(s.aiTimer);
       s.aiTimer = null;
     }
+    // 记住重开前各玩家单独选的 provider，重建 agents 后还原
+    const savedProviders: Record<number, string> = {};
+    for (const [id, agent] of Object.entries(s.agents)) {
+      savedProviders[Number(id)] = agent.providerName;
+    }
     s.game = createServerGame();
     s.version++;
     s.stall = { sig: '', count: 0 };
     s.agents = createAgentRuntimes(s.game.state, s.aiProvider);
+    for (const [id, agent] of Object.entries(s.agents)) {
+      const saved = savedProviders[Number(id)];
+      if (saved) agent.providerName = saved;
+    }
     s.tradeLedger = createAiTradeLedger();
     s.aiEvents = [];
     s.tradeEvents = [];

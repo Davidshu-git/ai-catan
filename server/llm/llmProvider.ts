@@ -24,6 +24,8 @@ const LLM_MAX_TOKENS = Number(process.env.LLM_MAX_TOKENS ?? 1024);
 const LLM_TEMPERATURE = Number(process.env.LLM_TEMPERATURE ?? 0.4);
 // LLM_HINT=0 关闭空间动作的语义化 hint，用于 A/B 对比
 const LLM_HINT_DEFAULT = process.env.LLM_HINT !== '0';
+// MINIMAX_ENABLE_THINKING=1 开启 thinking（默认关闭，M2.7 thinking 拉满约 15-25s）
+const MINIMAX_ENABLE_THINKING = process.env.MINIMAX_ENABLE_THINKING === '1';
 
 export const LLM_SYSTEM_PROMPT = `你是卡坦岛策略助手，正在替一名 AI 玩家做一步决策。
 
@@ -290,6 +292,7 @@ async function callMinimax(
         temperature: LLM_TEMPERATURE,
         system: blocks.system,
         messages: [{ role: 'user', content: blocks.userBlocks }],
+        ...(MINIMAX_ENABLE_THINKING ? {} : { thinking: { type: 'disabled' } }),
       }),
     });
     if (!resp.ok) {

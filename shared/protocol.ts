@@ -19,8 +19,10 @@ export interface AiModelContextEvent {
     system?: number;
     user?: number;
     total: number;
-    view: number;
-    legalActions: number;
+    /** 行动决策有；交易聊天没有 */
+    view?: number;
+    /** 行动决策有；交易聊天里若用则代表 counter 候选数对应的字符量 */
+    legalActions?: number;
     providerInput?: number;
   };
   /** Anthropic messages 的 system 字段；仅真实 LLM Provider 有 */
@@ -193,6 +195,12 @@ export interface TradeChatMessageEvent {
   message: string;
   offer?: TradeOfferEvent;
   limits: TradeLimitsEvent;
+  /** 该条消息背后 LLM 调用的输入快照；仅 LLM provider 生成的消息有，规则 fallback 无 */
+  modelContext?: AiModelContextEvent;
+  /** LLM 原始返回（解析前的字符串），便于前端排查 */
+  rawOutput?: string;
+  /** 该 LLM 调用使用的 provider（含模型名），与 modelContext.provider 一致 */
+  provider?: string;
   ts: number;
 }
 

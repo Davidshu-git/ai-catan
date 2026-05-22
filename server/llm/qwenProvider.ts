@@ -26,6 +26,8 @@ const DEFAULT_MODEL =
 const LLM_TIMEOUT_MS = Number(process.env.LLM_TIMEOUT_MS ?? 30_000);
 const LLM_MAX_TOKENS = Number(process.env.LLM_MAX_TOKENS ?? 1024);
 const LLM_TEMPERATURE = Number(process.env.LLM_TEMPERATURE ?? 0.4);
+// qwen3.6-plus 默认开启 thinking，对游戏决策不必要且严重拖慢速度（一次推理消耗大量 token）
+const QWEN_ENABLE_THINKING = process.env.QWEN_ENABLE_THINKING === '1';
 const LLM_HINT_DEFAULT = process.env.LLM_HINT !== '0';
 
 interface OpenAiChatResp {
@@ -136,6 +138,7 @@ async function callQwen(
         ],
         temperature: LLM_TEMPERATURE,
         max_tokens: LLM_MAX_TOKENS,
+        enable_thinking: QWEN_ENABLE_THINKING,
       }),
     });
     if (!resp.ok) {

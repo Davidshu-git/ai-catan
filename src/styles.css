@@ -74,6 +74,37 @@ body {
   filter: drop-shadow(9px 14px 0 rgba(18, 15, 13, 0.28)) drop-shadow(0 18px 30px rgba(0, 0, 0, 0.25));
 }
 
+/* ---- 棋盘右下角重开按钮 ---- */
+.new-game-fab {
+  position: absolute;
+  bottom: 16px;
+  right: 16px;
+  z-index: 4;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  border: 2px solid #2a1f14;
+  background: var(--cream, #f5ead4);
+  color: #2a1f14;
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+  box-shadow: 3px 4px 0 rgba(18, 15, 13, 0.45);
+  transition: transform 0.15s, box-shadow 0.15s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.new-game-fab:hover {
+  background: #ead8b5;
+  transform: translateY(-2px);
+  box-shadow: 3px 6px 0 rgba(18, 15, 13, 0.45);
+}
+.new-game-fab:active {
+  transform: translateY(2px);
+  box-shadow: 1px 2px 0 rgba(18, 15, 13, 0.45);
+}
+
 /* ---- 左右分隔条 ---- */
 .splitter {
   flex: 0 0 6px;
@@ -881,27 +912,29 @@ select {
 }
 
 .trade-message {
-  padding: 5px 0 0 7px;
-  border-left: 2px solid rgba(58, 44, 33, 0.36);
+  padding: 5px 7px 6px;
+  border-left: 3px solid rgba(58, 44, 33, 0.36);
+  background: rgba(246, 237, 215, 0.28);
+  border-radius: 0 4px 4px 0;
 }
 
-.trade-message.is-accept,
-.trade-message.is-accept .trade-message-head span:last-child {
+.trade-message.is-accept {
   border-left-color: var(--good);
-  color: var(--good);
+  background: rgba(82, 107, 59, 0.1);
 }
+.trade-message.is-accept .trade-message-head span:last-child { color: var(--good); }
 
-.trade-message.is-reject,
-.trade-message.is-reject .trade-message-head span:last-child {
+.trade-message.is-reject {
   border-left-color: var(--bad);
-  color: var(--bad);
+  background: rgba(143, 46, 41, 0.08);
 }
+.trade-message.is-reject .trade-message-head span:last-child { color: var(--bad); }
 
-.trade-message.is-counter-offer,
-.trade-message.is-counter-offer .trade-message-head span:last-child {
+.trade-message.is-counter-offer {
   border-left-color: var(--warn);
-  color: #735a26;
+  background: rgba(181, 150, 69, 0.1);
 }
+.trade-message.is-counter-offer .trade-message-head span:last-child { color: #735a26; }
 
 .trade-message-head b {
   color: var(--ink);
@@ -919,10 +952,22 @@ select {
 }
 
 .trade-message-text {
-  margin-top: 3px;
+  margin-top: 4px;
   color: var(--ink);
-  font-weight: 650;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.5;
   white-space: pre-wrap;
+}
+
+.trade-message-debug {
+  margin-top: 5px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.trade-message-debug .thought-context {
+  font-size: 11px;
 }
 
 .trade-result {

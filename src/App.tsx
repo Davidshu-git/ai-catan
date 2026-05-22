@@ -593,6 +593,9 @@ export function App() {
           />
         </div>
         <DiceHud dice={state.dice} turn={state.turn} />
+        <button className="new-game-fab" onClick={newGame} title="重开一局">
+          ↺
+        </button>
       </div>
 
       <div
@@ -1391,8 +1394,8 @@ function ModelContextPanel({ context }: { context: AiModelContextEvent }) {
         {context.retryFeedbackCount > 0 && <span>{context.retryFeedbackCount} 次反馈</span>}
       </summary>
       <div className="thought-context-stats">
-        <span>view {countText(context.chars.view)}</span>
-        <span>actions {countText(context.chars.legalActions)}</span>
+        {context.chars.view != null && <span>view {countText(context.chars.view)}</span>}
+        {context.chars.legalActions != null && <span>actions {countText(context.chars.legalActions)}</span>}
         {context.chars.system != null && <span>system {countText(context.chars.system)}</span>}
         {context.chars.user != null && <span>user {countText(context.chars.user)}</span>}
       </div>
@@ -1400,6 +1403,35 @@ function ModelContextPanel({ context }: { context: AiModelContextEvent }) {
       <ModelContextBlock title="user" text={context.userPrompt} />
       <ModelContextBlock title="provider input" text={context.providerInputJson} />
     </details>
+  );
+}
+
+function TradeMessageDebug({
+  modelContext,
+  rawOutput,
+  provider,
+}: {
+  modelContext?: AiModelContextEvent;
+  rawOutput?: string;
+  provider?: string;
+}) {
+  if (!modelContext && !rawOutput) return null;
+  return (
+    <div className="trade-message-debug">
+      {modelContext && <ModelContextPanel context={modelContext} />}
+      {rawOutput && (
+        <details className="thought-context">
+          <summary>
+            <span>模型原始输出</span>
+            {provider && <span>{provider}</span>}
+            <span>{countText(rawOutput.length)} 字</span>
+          </summary>
+          <div className="thought-context-block">
+            <pre>{rawOutput}</pre>
+          </div>
+        </details>
+      )}
+    </div>
   );
 }
 
@@ -1581,9 +1613,8 @@ function ResList({ res }: { res: ResMap }) {
   return (
     <span className="trade-res-list">
       {entries.map((r) => (
-        <span key={r} className="trade-res-pill" title={RESOURCE_LABEL[r]}>
-          <ResIcon r={r} size={11} />
-          <b>{res[r]}</b>
+        <span key={r} className="trade-res-pill">
+          {r}×{res[r]}
         </span>
       ))}
     </span>
@@ -1713,6 +1744,13 @@ function TradeLogContent({
                   </div>
                   <div className="trade-message-text">{msg.message}</div>
                   {msg.offer && <TradeOfferLine offer={msg.offer} players={players} />}
+                  {(msg.modelContext || msg.rawOutput) && (
+                    <TradeMessageDebug
+                      modelContext={msg.modelContext}
+                      rawOutput={msg.rawOutput}
+                      provider={msg.provider}
+                    />
+                  )}
                 </div>
               ))}
             </div>
