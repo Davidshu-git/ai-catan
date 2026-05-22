@@ -1,9 +1,10 @@
 // ============================================================
 // 交易谈判 LLM Provider：提议消息生成 + 回应决策（接受/拒绝/还价）
 // ------------------------------------------------------------
-// 两种调用：
+// 三种调用：
 //   generateProposeMessage：发起方生成开场白（不决策，只出文字）
 //   decideTradeResponse：参与方回应报价，输出 decision + message
+//   decideTradeChatResponse：参与方回应无报价喊话，只出文字
 // rule/mock provider 直接走 aiAcceptsTrade 规则兜底，不调 LLM。
 // ============================================================
 
@@ -116,6 +117,20 @@ export interface TradeResponseOutput {
   provider?: string;
 }
 
+export interface TradeChatInput {
+  state: GameState;
+  responderId: number;
+  history: TradeChatMessageEvent[];
+  agent?: AgentPromptContext;
+}
+
+export interface TradeChatOutput {
+  message: string;
+  modelContext?: AiModelContextEvent;
+  rawOutput?: string;
+  provider?: string;
+}
+
 export interface TradeProposeInput {
   state: GameState;
   initiatorId: number;
@@ -215,6 +230,19 @@ const PROPOSE_SYSTEM = `你是卡坦岛交易谈判 AI，正在替一名玩家�
 1. 输出必须是严格 JSON：{"message":"1-2句中文开场白"}
 2. 说明你想用什么换什么，以及为什么这对双方有利
 3. 第一人称，带角色个性，简洁有力，不要客套话
+4. 只输出 JSON，不要代码块或其他文字`;
+
+const CHAT_SYSTEM = `你是卡坦岛交易谈判 AI，正在替一名玩家回应真人玩家的喊话。
+
+当前没有结构化报价，因此你不能承诺成交，也不要说“接受”或“成交”。你可以：
+- 表态自己缺什么 / 愿意考虑什么资源交换；
+- 回应真人对某个玩家的点名或挑拨；
+- 简短施压、拒绝、试探，体现你的角色个性。
+
+铁律：
+1. 输出必须是严格 JSON：{"message":"1-2句中文"}
+2. 如果真人喊话里点名“小红/红色/红/P0”等别名，要按输入里的玩家身份识别
+3. 不要编造自己没有的资源数量；可以说“如果你出麦/矿我会考虑”
 4. 只输出 JSON，不要代码块或其他文字`;
 
 const INITIATE_SYSTEM = `你是卡坦岛交易发起 AI，正在替一名玩家决定「此刻要不要向其他 AI 发起一笔资源交易，以及报什么价」。
@@ -337,6 +365,44 @@ function buildProposeUserMessage(input: TradeProposeInput): string {
   parts.push(`  你想换：${resStr(offer.receive)}`);
   parts.push('');
   parts.push('生成一句简洁有力的交易开场白 JSON：');
+  return parts.join('\n');
+}
+
+function buildChatUserMessage(input: TradeChatInput): string {
+  const { state, responderId, history, agent } = input;
+  const me = state.players[responderId];
+  const parts: string[] = [];
+
+  if (agent) {
+    parts.push(`你的角色：${agent.name}（${agent.personality}）`);
+    if (agent.stance) parts.push(`当前策略：${agent.stance}`);
+    if (agent.memory.length > 0) {
+      parts.push(`近期记忆：${agent.memory.slice(-4).join(' | ')}`);
+    }
+    parts.push('');
+  }
+
+  parts.push(`你的身份：${pname(state, responderId)}（正在回应真人玩家的喊话）`);
+  parts.push(competitionLine(state, responderId));
+  parts.push(`你的资源：${resStr(me.resources as ResMap)}（手牌${handSize(me)}张）`);
+  const goals = myNearGoals(state, responderId);
+  if (goals) parts.push(goals);
+  parts.push('');
+
+  parts.push('玩家身份与常用别名：');
+  for (const p of state.players) {
+    const display = pname(state, p.id);
+    parts.push(`  P${p.id}=${display}（可称：${display}、小${display}、${display}色、P${p.id}）`);
+  }
+  parts.push('');
+
+  parts.push('本轮对话历史：');
+  for (const msg of history.slice(-8)) {
+    const name = msg.speaker == null ? '系统' : pname(state, msg.speaker);
+    parts.push(`  [${name}/${msg.decision}] ${msg.message}`);
+  }
+  parts.push('');
+  parts.push('请回应最后一条真人喊话。输出 JSON：');
   return parts.join('\n');
 }
 
@@ -544,6 +610,15 @@ function ruleTradeResponse(input: TradeResponseInput): TradeResponseOutput {
   return { decision: 'REJECT', message: '这个价不合算，没法接受。' };
 }
 
+function ruleTradeChatResponse(input: TradeChatInput): TradeChatOutput {
+  const goals = myNearGoals(input.state, input.responderId);
+  return {
+    message: goals
+      ? `我听到了。${goals}，如果你能给我缺的资源，我会认真考虑。`
+      : '我听到了。先把你愿意给什么、想换什么说清楚，我再表态。',
+  };
+}
+
 // ---------- 公开接口 ----------
 
 function buildTradeModelContext(
@@ -630,6 +705,40 @@ export async function decideTradeResponse(
     console.warn(`[trade-llm] ${providerName} 失败，走规则 fallback：${(err as Error).message}`);
     const ruled = ruleTradeResponse(input);
     return { ...ruled, modelContext, rawOutput: `[LLM 调用失败] ${(err as Error).message}`, provider: providerLbl };
+  }
+}
+
+/** 参与方回应无报价喊话：返回自然语言消息，不产生成交候选 */
+export async function decideTradeChatResponse(
+  input: TradeChatInput,
+  providerName: string,
+): Promise<TradeChatOutput> {
+  const isLlm = providerName === 'minimax' || providerName === 'qwen36';
+  if (!isLlm) return ruleTradeChatResponse(input);
+
+  const user = buildChatUserMessage(input);
+  const providerLbl = providerLabel(providerName);
+  const modelContext = buildTradeModelContext(providerLbl, CHAT_SYSTEM, user);
+
+  try {
+    const raw = await callLlm(providerName, CHAT_SYSTEM, user);
+    const parsed = extractJson(raw) as Record<string, unknown>;
+    const message = typeof parsed.message === 'string' ? parsed.message.trim() : '';
+    return {
+      message: message || ruleTradeChatResponse(input).message,
+      modelContext,
+      rawOutput: raw,
+      provider: providerLbl,
+    };
+  } catch (err) {
+    console.warn(`[trade-llm] chat 失败，走规则 fallback：${(err as Error).message}`);
+    const ruled = ruleTradeChatResponse(input);
+    return {
+      ...ruled,
+      modelContext,
+      rawOutput: `[LLM 调用失败] ${(err as Error).message}`,
+      provider: providerLbl,
+    };
   }
 }
 

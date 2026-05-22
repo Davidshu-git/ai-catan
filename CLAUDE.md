@@ -154,7 +154,7 @@ LLM prompt / hint 里的骰点概率权重统一叫**产出点**，不要再写�
 
 **交易两条路径**（前后端各管一段）：
 - **AI → 人类**：reducer 的 `OFFER_TRADE` 设 `state.pendingTrade`；前端弹 `PendingTrade` 卡，人类点接受/拒绝触发 `RESPOND_TRADE`。
-- **人类 → AI**：前端不再调用 `aiAcceptsTrade`，改 `socket.emit('propose_human_trade', ..., ack)`；server 跑 `aiAcceptsTrade`，接受则发 `TRADE_EXECUTE`，无论接受与否都通过 ack 回调返回 `{accepted}` 给前端做 toast。**不要回退到前端跑 aiAcceptsTrade**——这违反"状态唯一权威在 server"原则，未来接 LLM AI 时会更乱。
+- **人类 → AI**：当前主路径是 `human_trade_start` / `human_trade_say` / `human_trade_finalize` / `human_trade_end` 多轮谈判；对话展示复用 `trade_chat_*`，实时操作态走 `human_trade_state`，最终成交只走 `TRADE_EXECUTE`。旧的一次性 `propose_human_trade` 事件仍保留为兼容入口，前端操作区不再使用。**不要回退到前端跑 `aiAcceptsTrade`**——这违反"状态唯一权威在 server"原则，未来接 LLM AI 时会更乱。
 
 **发展卡时序。** 购买进 `newDevCards`（本回合不可用），`endTurn` 时并入 `devCards`；`victory` 卡不进手牌、立即 `vpCards++`。每回合限打一张（`devPlayed`）。骑士卡可在 `roll`（掷骰前）或 `main` 阶段打出。
 
@@ -173,18 +173,23 @@ LLM prompt / hint 里的骰点概率权重统一叫**产出点**，不要再写�
 |---|---|---|---|
 | S → C | `sync_state` | `FullGame` | 全量游戏状态。连接时 / 每次 reduce 后广播 |
 | C → S | `dispatch` | `Action` | 玩家动作；server reduce + 广播 + scheduleAI |
-| C → S | `propose_human_trade` | `{target, give, receive}` + ack | 人→AI 报价。ack 收 `{accepted: boolean}` |
+| C → S | `propose_human_trade` | `{target, give, receive}` + ack | 兼容保留的一次性人→AI 报价。新前端操作区使用 `human_trade_*` 多轮谈判 |
 | C → S | `new_game` | —— | 清掉当前 session，重开一局，广播 |
 | C → S | `set_ai_autoplay` | `{autoplay: boolean}` + ack | 开关服务端 AI 自动连续推进；关闭时取消排队中的 AI 步骤，并让进行中的 LLM 决策返回后失效 |
 | C → S | `set_ai_hint` | `{hint: boolean}` + ack | 切换是否在 LLM prompt 里塞空间动作 hint（A/B 实验用）；仅影响 llm provider，rule/mock 忽略；不作废进行中的决策 |
-| C → S | `set_ai_provider` | `{player?, provider}` + ack | 切换单个 AI 或全体 AI 的 provider（rule / mock / minimax / qwen36；前端按玩家独立切换） |
+| C → S | `set_ai_provider` | `{player?, provider}` + ack | 切换单个 AI 或全体 AI 的 provider（rule / mock / minimax / qwen36；前端按玩家独立切换）；`provider:'human'` 且带 `player` 时把该席位切为真人 |
 | C → S | `step_ai` | ack | 手动推进一个 AI 动作；仅在当前有 AI 可行动且未 busy/queued 时成功 |
+| C → S | `human_trade_start` | `{give, receive, message?, participants?}` + ack | 真人发起多轮交互谈判，可仅喊话或带结构化报价 |
+| C → S | `human_trade_say` | `{message?, give?, receive?}` + ack | 真人继续喊话 / 改价，触发一轮 AI 回应 |
+| C → S | `human_trade_finalize` | `{player}` + ack | 真人与某 AI 的 standing deal 一键成交（服务端走 `TRADE_EXECUTE`） |
+| C → S | `human_trade_end` | ack | 真人主动结束当前谈判 |
 | S → C | `ai_thought` | `AiThoughtEvent` | 一次 AI 决策的思考流（player/agentName/phase/thought/actionId/actionHint/action/modelContext/timing/provider/retries/status）；`action` 已通过 Maker-Checker，可用于前端棋盘高亮；`actionHint` 是最终选中动作的语义化情报；`modelContext` 展示完整模型输入 / Provider 输入；`timing` 展示服务端调用链路耗时 |
 | S → C | `ai_error` | `AiErrorEvent` | Provider 输出非法 / 调用失败时广播；重试过程的错误也会发，含 agentName；错误事件也可带 `modelContext` 与 `timing` 方便分析失败输入和耗时 |
 | S → C | `ai_control_state` | `AiControlState` | AI 控制状态（autoplay/queued/busy/canStep/hintEnabled/provider/currentAgent）；连接时与状态变化时广播 |
-| S → C | `trade_chat_started` | `TradeChatStartedEvent` | AI-only 交易谈判开始（initiator/participants/proposedTrade/limits） |
-| S → C | `trade_chat_message` | `TradeChatMessageEvent` | AI 谈判发言（PROPOSE / ACCEPT / REJECT / COUNTER_OFFER / SYSTEM），可带结构化 offer |
-| S → C | `trade_chat_closed` | `TradeChatClosedEvent` | AI 谈判结束（accepted/rejected/expired/invalid），成交时带 finalTrade |
+| S → C | `human_trade_state` | `HumanTradeStateEvent` | 真人谈判实时态（当前报价、AI 接受/还价候选、发言限流、busy）；连接时与每次变化广播 |
+| S → C | `trade_chat_started` | `TradeChatStartedEvent` | 交易谈判开始（AI-only 或真人多轮谈判共用；initiator/participants/proposedTrade/limits） |
+| S → C | `trade_chat_message` | `TradeChatMessageEvent` | 谈判发言（PROPOSE / CHAT / ACCEPT / REJECT / COUNTER_OFFER / SYSTEM），可带结构化 offer |
+| S → C | `trade_chat_closed` | `TradeChatClosedEvent` | 谈判结束（accepted/rejected/expired/invalid），成交时带 finalTrade |
 
 `ai_thought` / `ai_error` / `ai_control_state` 与 `trade_chat_*` 的 DTO 定义在 `shared/protocol.ts`。server 端有最近 60 条 AI 事件环形 buffer 与最近 80 条交易谈判事件 buffer：新连接的客户端会在 `sync_state` 之后立即补拉历史事件。AI 自动推进默认关闭（`AI_AUTOPLAY=1` 可改默认开启），前端通过 AI 控制面板切换或单步推进。`PLAYER_MODE=human0` 可临时恢复 P0 人类 + 3 AI；默认 `all-ai`。
 

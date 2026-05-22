@@ -184,7 +184,7 @@ body {
 
 .sidebar-tabs {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(4, 1fr);
   gap: 6px;
   margin-bottom: 8px;
 }
@@ -199,6 +199,7 @@ body {
   border-radius: 5px;
   padding: 6px 8px;
   cursor: pointer;
+  position: relative;
 }
 
 .sidebar-tabs button.active {
@@ -213,11 +214,65 @@ body {
   overflow: hidden;
 }
 
+.tab-dot {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--bad);
+  box-shadow: 0 0 0 2px rgba(246, 237, 215, 0.72);
+}
+
 .sidebar-event-panel .thought-log,
 .sidebar-event-panel .trade-log,
 .sidebar-event-panel .log {
   height: 100%;
   max-height: none;
+}
+
+.trade-tab-layout {
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  position: relative;
+}
+
+.trade-tab-layout .trade-log {
+  flex: 1 1 auto;
+  height: auto;
+  min-height: 0;
+  max-height: none;
+  padding-right: 2px;
+  padding-bottom: 8px;
+}
+
+.trade-log-empty {
+  justify-content: flex-end;
+}
+
+.human-actions {
+  height: 100%;
+  overflow-y: auto;
+  padding-right: 2px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.human-actions .card {
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+  padding: 0 0 10px;
+}
+
+.human-actions .card::after {
+  display: none;
 }
 
 .sidebar-fixed-controls {
@@ -447,6 +502,16 @@ body {
 .btn-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }
 .btn-grid.btn-grid-3 { grid-template-columns: repeat(3, 1fr); }
 .btn-grid .btn { width: 100%; }
+.build-actions {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+}
+.build-actions .btn {
+  min-width: 0;
+  padding: 8px 4px;
+  font-size: 12px;
+  white-space: nowrap;
+}
 .btn-col { display: flex; flex-direction: column; gap: 9px; }
 .cost { font-size: 10px; color: var(--ink); font-weight: 800; display: block; margin-top: 3px; }
 
@@ -936,6 +1001,11 @@ select {
 }
 .trade-message.is-counter-offer .trade-message-head span:last-child { color: #735a26; }
 
+.trade-message.is-chat {
+  border-left-color: var(--line-soft);
+  background: rgba(246, 237, 215, 0.24);
+}
+
 .trade-message-head b {
   color: var(--ink);
   font-size: 12px;
@@ -998,6 +1068,134 @@ select {
   padding: 1px 5px;
 }
 
+.human-trade-limits {
+  margin-top: 0;
+  margin-bottom: 9px;
+}
+
+.human-deals {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin-bottom: 10px;
+}
+
+.human-deal {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  padding: 7px;
+  border: 1px dashed rgba(58, 44, 33, 0.42);
+  border-radius: 5px;
+  background: rgba(82, 107, 59, 0.1);
+}
+
+.human-deal b {
+  display: block;
+  color: var(--good);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.human-deal span {
+  display: block;
+  color: #4b3a2b;
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1.45;
+  margin-top: 2px;
+}
+
+.human-deal .btn {
+  padding: 7px 10px;
+  font-size: 12px;
+}
+
+.human-negotiation {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.trade-chat-dock {
+  flex: 0 0 auto;
+  position: sticky;
+  bottom: 0;
+  z-index: 3;
+  margin-top: 8px;
+  padding: 9px;
+  background:
+    linear-gradient(180deg, rgba(246, 237, 215, 0.9), rgba(232, 215, 180, 0.92));
+  border: 2px solid rgba(58, 44, 33, 0.72);
+  box-shadow: 0 -8px 18px rgba(36, 29, 26, 0.14), 3px 4px 0 rgba(36, 29, 26, 0.12);
+}
+
+.trade-chat-dock::after {
+  display: none;
+}
+
+.trade-quote-details {
+  border: 1px dashed rgba(58, 44, 33, 0.34);
+  border-radius: 5px;
+  background: rgba(246, 237, 215, 0.22);
+  padding: 5px 7px 7px;
+}
+
+.trade-quote-details summary {
+  cursor: pointer;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  align-items: center;
+  color: var(--accent-d);
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.trade-quote-details summary span {
+  border: 1px solid rgba(100, 42, 36, 0.26);
+  border-radius: 3px;
+  background: rgba(246, 237, 215, 0.44);
+  padding: 1px 5px;
+}
+
+.human-trade-text {
+  width: 100%;
+  min-height: 58px;
+  resize: vertical;
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 700;
+  line-height: 1.45;
+  color: var(--ink);
+  background: #f7efd9;
+  border: 2px solid var(--line);
+  border-radius: 6px;
+  padding: 8px 9px;
+  box-shadow: inset 2px 2px 0 rgba(36, 29, 26, 0.08);
+}
+
+.human-trade-text:disabled {
+  opacity: 0.58;
+  cursor: not-allowed;
+}
+
+.trade-chat-dock .human-trade-text {
+  min-height: 44px;
+  resize: none;
+}
+
+.human-trade-actions {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+}
+
+.human-trade-actions .btn {
+  width: 100%;
+}
+
 .hint {
   background: #d7d0ad;
   border: 2px solid var(--line);
@@ -1012,6 +1210,32 @@ select {
 /* ---- 交易 / 步进器 ---- */
 .trade-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 7px; }
 .trade-cell { display: flex; flex-direction: column; align-items: center; gap: 5px; }
+.trade-res-key {
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 900;
+  line-height: 18px;
+  min-height: 18px;
+}
+.trade-number-input {
+  width: 38px;
+  height: 28px;
+  padding: 2px 4px;
+  border: 2px solid var(--line);
+  border-radius: 5px;
+  background: #f7efd9;
+  color: var(--ink);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 900;
+  line-height: 1;
+  text-align: center;
+}
+
+.trade-number-input:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
 .stepper { display: flex; align-items: center; gap: 4px; }
 
 .stepper button {

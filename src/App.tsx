@@ -10,6 +10,7 @@ import type {
   AiModelOutputEvent,
   AiTimingEvent,
   AiThoughtEvent,
+  HumanTradeStateEvent,
   TradeChatClosedEvent,
   TradeChatMessageEvent,
   TradeChatStartedEvent,
@@ -35,8 +36,6 @@ import {
   type ResMap,
 } from '../shared/types';
 
-const HUMAN = 0;
-
 // 服务端地址：构建时由 Vite 注入 VITE_SERVER_URL；为空字符串则同源（生产 nginx 反代场景）
 const SERVER_URL = import.meta.env.VITE_SERVER_URL ?? '';
 
@@ -46,30 +45,22 @@ const socket: Socket = io(SERVER_URL, {
   transports: ['websocket', 'polling'],
 });
 
-// 人→AI 交易：服务端跑 aiAcceptsTrade，通过 ack 回调返回是否接受
-function proposeHumanTrade(
-  target: number,
-  give: ResMap,
-  receive: ResMap,
-): Promise<boolean> {
-  return new Promise((resolve) => {
-    socket
-      .timeout(2000)
-      .emit(
-        'propose_human_trade',
-        { target, give, receive },
-        (err: Error | null, res?: { accepted: boolean }) => {
-          if (err || !res) resolve(false);
-          else resolve(res.accepted);
-        },
-      );
-  });
+function resTotal(res: ResMap): number {
+  return RESOURCES.reduce((sum, r) => sum + res[r], 0);
 }
 
-function costText(c: Partial<ResMap>): string {
-  return RESOURCES.filter((r) => (c[r] ?? 0) > 0)
-    .map((r) => `${RESOURCE_LABEL[r]}${c[r]! > 1 ? '×' + c[r] : ''}`)
-    .join(' ');
+function resSummary(res: ResMap): string {
+  return (
+    RESOURCES.filter((r) => res[r] > 0)
+      .map((r) => `${RESOURCE_LABEL[r]}×${res[r]}`)
+      .join(' ') || '无'
+  );
+}
+
+function clampNumberInput(value: string, max: number): number {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return 0;
+  return Math.max(0, Math.min(max, Math.floor(n)));
 }
 
 function ResIcon({ r, size = 14 }: { r: Resource; size?: number }) {
@@ -176,6 +167,7 @@ type TradeLogItem =
   | { kind: 'closed'; data: TradeChatClosedEvent };
 
 type AiBoardFocus = { player: number; action: Action; ts: number };
+type SocketAck = { ok: boolean; reason?: string };
 type AiStepTimer = {
   running: boolean;
   startedAt: number | null;
@@ -183,7 +175,7 @@ type AiStepTimer = {
   lastMs: number | null;
   lastOk: boolean | null;
 };
-type SidebarEventTab = 'thoughts' | 'trades' | 'log';
+type SidebarEventTab = 'human' | 'thoughts' | 'trades' | 'log';
 
 const THOUGHT_LOG_MAX = 80;
 const TRADE_LOG_MAX = 120;
@@ -198,6 +190,8 @@ const DEFAULT_AI_CONTROL: AiControlState = {
   agentProviders: {},
   agentPersonalities: {},
 };
+
+const EMPTY_HUMAN_TRADE_STATE: HumanTradeStateEvent = { active: false };
 
 const EMPTY_AI_STEP_TIMER: AiStepTimer = {
   running: false,
@@ -235,6 +229,8 @@ function normalizeProviderKey(provider: string | undefined): string {
 
 function providerShortLabel(provider: string | undefined): string {
   switch (normalizeProviderKey(provider)) {
+    case 'human':
+      return '真人';
     case 'minimax':
       return 'mini';
     case 'qwen36':
@@ -248,6 +244,51 @@ function providerShortLabel(provider: string | undefined): string {
   }
 }
 
+function emitAck(event: string, payload?: unknown, timeout = 2500): Promise<SocketAck> {
+  return new Promise((resolve) => {
+    const done = (err: Error | null, res?: SocketAck) => {
+      if (err || !res) resolve({ ok: false, reason: '服务端暂未响应' });
+      else resolve(res);
+    };
+    if (payload === undefined) socket.timeout(timeout).emit(event, done);
+    else socket.timeout(timeout).emit(event, payload, done);
+  });
+}
+
+function humanActionSeat(state: FullGame['state'] | undefined): number | null {
+  if (!state) return null;
+  if (state.phase === 'discard') {
+    const p = state.players.find((pl) => !pl.isAI && state.discardLeft[pl.id] != null);
+    if (p) return p.id;
+  }
+  if (state.pendingTrade) {
+    const target = state.players[state.pendingTrade.to];
+    if (target && !target.isAI) return target.id;
+  }
+  const current = state.players[state.current];
+  return current && !current.isAI ? current.id : null;
+}
+
+function humanAttentionKey(
+  state: FullGame['state'] | undefined,
+  humanTradeState: HumanTradeStateEvent,
+): string {
+  if (!state) return '';
+  const seat = humanActionSeat(state);
+  if (seat != null) {
+    const discardLeft = state.discardLeft[seat] ?? 0;
+    const pending = state.pendingTrade?.to === seat ? state.pendingTrade.from : '';
+    return `${state.gameId}:${state.turn}:${state.phase}:${state.current}:${seat}:${state.setupStep}:${discardLeft}:${pending}`;
+  }
+  const deals = humanTradeState.standingDeals ?? [];
+  if (humanTradeState.active && deals.length > 0) {
+    return `${humanTradeState.sessionId}:${deals
+      .map((d) => `${d.player}-${d.source}-${resSummary(d.give)}-${resSummary(d.receive)}`)
+      .join('|')}`;
+  }
+  return '';
+}
+
 export function App() {
   // 初始 null：等待服务端 sync_state；AI 驱动循环全部在服务端
   const [game, setGame] = useState<FullGame | null>(null);
@@ -256,6 +297,8 @@ export function App() {
   const [toast, setToast] = useState<string | null>(null);
   const [thoughtLog, setThoughtLog] = useState<ThoughtLogItem[]>([]);
   const [tradeLog, setTradeLog] = useState<TradeLogItem[]>([]);
+  const [humanTradeState, setHumanTradeState] =
+    useState<HumanTradeStateEvent>(EMPTY_HUMAN_TRADE_STATE);
   const [aiFocus, setAiFocus] = useState<AiBoardFocus | null>(null);
   const [aiControl, setAiControl] = useState<AiControlState>(DEFAULT_AI_CONTROL);
   const [aiStepTimer, setAiStepTimer] = useState<AiStepTimer>(EMPTY_AI_STEP_TIMER);
@@ -463,6 +506,7 @@ export function App() {
       appendTrade({ kind: 'message', data: ev });
     const onTradeClosed = (ev: TradeChatClosedEvent) =>
       appendTrade({ kind: 'closed', data: ev });
+    const onHumanTradeState = (ev: HumanTradeStateEvent) => setHumanTradeState(ev);
     const onAiControl = (ev: AiControlState) => {
       setAiControl(ev);
       const hasWork = ev.queued || ev.busy;
@@ -490,6 +534,7 @@ export function App() {
     socket.on('trade_chat_started', onTradeStarted);
     socket.on('trade_chat_message', onTradeMessage);
     socket.on('trade_chat_closed', onTradeClosed);
+    socket.on('human_trade_state', onHumanTradeState);
     socket.on('ai_control_state', onAiControl);
     return () => {
       socket.off('connect', onConnect);
@@ -500,6 +545,7 @@ export function App() {
       socket.off('trade_chat_started', onTradeStarted);
       socket.off('trade_chat_message', onTradeMessage);
       socket.off('trade_chat_closed', onTradeClosed);
+      socket.off('human_trade_state', onHumanTradeState);
       socket.off('ai_control_state', onAiControl);
     };
   }, [finishAiAutoTimer, finishAiStepTimer, startAiAutoTimer]);
@@ -520,6 +566,7 @@ export function App() {
       prevGameIdRef.current = gid;
       setThoughtLog([]);
       setTradeLog([]);
+      setHumanTradeState(EMPTY_HUMAN_TRADE_STATE);
       setAiFocus(null);
       aiStepAckedRef.current = false;
       aiStepSawWorkRef.current = false;
@@ -538,6 +585,14 @@ export function App() {
 
   // ⚠️ 所有 hook 必须在 early return 之前调用（Rules of Hooks）
   const state = game?.state;
+  const activeHumanSeat = useMemo(() => humanActionSeat(state), [state]);
+  const humanTabAttentionKey = useMemo(
+    () => humanAttentionKey(state, humanTradeState),
+    [state, humanTradeState],
+  );
+  useEffect(() => {
+    if (humanTabAttentionKey) setSidebarEventTab('human');
+  }, [humanTabAttentionKey]);
   const isHumanTurn = state ? state.players[state.current]?.isAI === false : false;
   const isSetup = state?.phase === 'setup1' || state?.phase === 'setup2';
   const boardMode: BoardMode = useMemo(() => {
@@ -646,21 +701,21 @@ export function App() {
             connected={connected}
             onSetProvider={setAiProvider}
           />
-          <Phase
-            game={game}
-            mode={mode}
-            setMode={setMode}
-            dispatch={dispatch}
-            flash={flash}
-          />
         </div>
         <SidebarEventPanel
           activeTab={sidebarEventTab}
           onTabChange={setSidebarEventTab}
           thoughtItems={thoughtLog}
           tradeItems={tradeLog}
-          players={state.players}
-          state={state}
+          game={game}
+          mode={mode}
+          setMode={setMode}
+          dispatch={dispatch}
+          flash={flash}
+          humanSeat={activeHumanSeat}
+          humanTradeState={humanTradeState}
+          connected={connected}
+          hasHumanAttention={Boolean(humanTabAttentionKey)}
         />
         <div className="sidebar-fixed-controls">
           <AiControls
@@ -680,9 +735,9 @@ export function App() {
         <div className="modal-bg">
           <Confetti />
           <div className="modal">
-            <h2>🏆 {state.players[state.winner].name} 获胜</h2>
+            <h2>🏆 {playerDisplayName(state.players, state.winner)} 获胜</h2>
             <p>
-              {state.players[state.winner].name} 率先达到 10 分。
+              {playerDisplayName(state.players, state.winner)} 率先达到 10 分。
               <br />
               再来一局？
             </p>
@@ -791,6 +846,7 @@ function Players({
         {state.players.map((pl) => {
           const vp = pl.isAI ? publicVP(state, pl.id) : totalVP(state, pl.id);
           const lr = longestRoadLength(board, state, pl.id);
+          const provider = pl.isAI ? normalizeProviderKey(agentProviders[pl.id]) : 'human';
           return (
             <div
               key={pl.id}
@@ -799,28 +855,24 @@ function Players({
             >
               <div className="player-head">
                 <span className="player-dot" style={{ background: pl.color }} />
-                <span className="player-name">{pl.name}</span>
-                {pl.isAI && (() => {
-                  const provider = normalizeProviderKey(agentProviders[pl.id]);
-                  return (
-                    <select
-                      className="player-ai-select"
-                      value={provider}
-                      disabled={!connected}
-                      onChange={(e) => onSetProvider(pl.id, e.target.value)}
-                      title="单独切换这个 AI 玩家使用的后端模型"
-                    >
-                      {(providerOptions.length > 0
-                        ? providerOptions
-                        : [{ key: 'rule', label: '规则 AI', available: true }]
-                      ).map((option) => (
-                        <option key={option.key} value={option.key} disabled={!option.available}>
-                          {providerShortLabel(option.key)}
-                        </option>
-                      ))}
-                    </select>
-                  );
-                })()}
+                <span className="player-name">{playerDisplayName(state.players, pl.id)}</span>
+                <select
+                  className="player-ai-select"
+                  value={provider}
+                  disabled={!connected}
+                  onChange={(e) => onSetProvider(pl.id, e.target.value)}
+                  title="切换这个席位由真人或后端 AI 模型控制"
+                >
+                  <option value="human">真人</option>
+                  {(providerOptions.length > 0
+                    ? providerOptions
+                    : [{ key: 'rule', label: '规则 AI', available: true }]
+                  ).map((option) => (
+                    <option key={option.key} value={option.key} disabled={!option.available}>
+                      {providerShortLabel(option.key)}
+                    </option>
+                  ))}
+                </select>
               </div>
               <div className="player-stats">
                 <span className="player-stat-vp">
@@ -879,27 +931,36 @@ function Phase({
   setMode,
   dispatch,
   flash,
+  seat,
+  humanTradeState,
+  connected,
 }: {
   game: FullGame;
   mode: BoardMode;
   setMode: (m: BoardMode) => void;
   dispatch: (a: Action) => void;
   flash: (m: string) => void;
+  seat: number | null;
+  humanTradeState: HumanTradeStateEvent;
+  connected: boolean;
 }) {
   const { board, state } = game;
-  const human = state.players.find((p) => !p.isAI) ?? null;
-  const me = human ?? state.players[HUMAN];
-  const isHumanTurn = state.players[state.current]?.isAI === false;
+  if (seat == null) {
+    return <div className="hint">当前没有需要真人处理的动作。轮到 AI 时可用底部控制区推进。</div>;
+  }
+
+  const me = state.players[seat];
+  const isHumanTurn = state.current === seat && me?.isAI === false;
 
   return (
     <>
       {/* 弃牌（玩家） */}
-      {human && state.phase === 'discard' && state.discardLeft[human.id] != null && (
-        <DiscardPanel state={state} dispatch={dispatch} />
+      {state.phase === 'discard' && state.discardLeft[seat] != null && (
+        <DiscardPanel state={state} seat={seat} dispatch={dispatch} />
       )}
 
       {/* AI 向我提议交易 */}
-      {human && state.pendingTrade && state.pendingTrade.to === human.id && (
+      {state.pendingTrade && state.pendingTrade.to === seat && (
         <PendingTrade game={game} dispatch={dispatch} />
       )}
 
@@ -944,7 +1005,7 @@ function Phase({
                 className="btn"
                 onClick={() => dispatch({ type: 'STEAL', target: c })}
               >
-                偷 {state.players[c].name}（{handSize(state.players[c])} 张）
+                偷 {playerDisplayName(state.players, c)}（{handSize(state.players[c])} 张）
               </button>
             ))}
           </div>
@@ -955,10 +1016,13 @@ function Phase({
       {state.phase === 'main' && isHumanTurn && (
         <MainActions
           game={game}
+          seat={seat}
           mode={mode}
           setMode={setMode}
           dispatch={dispatch}
           flash={flash}
+          humanTradeState={humanTradeState}
+          connected={connected}
         />
       )}
     </>
@@ -969,53 +1033,58 @@ function Phase({
 
 function MainActions({
   game,
+  seat,
   mode,
   setMode,
   dispatch,
   flash,
+  humanTradeState,
+  connected,
 }: {
   game: FullGame;
+  seat: number;
   mode: BoardMode;
   setMode: (m: BoardMode) => void;
   dispatch: (a: Action) => void;
   flash: (m: string) => void;
+  humanTradeState: HumanTradeStateEvent;
+  connected: boolean;
 }) {
   const { state } = game;
-  const me = state.players[HUMAN];
+  const me = state.players[seat];
   const afford = (c: Partial<ResMap>) => RESOURCES.every((r) => me.resources[r] >= (c[r] ?? 0));
 
   return (
     <>
       <div className="card">
-        <h2>建造{state.freeRoads > 0 ? ` · 免费路 ×${state.freeRoads}` : ''}</h2>
-        <div className="btn-grid">
+        <div className="btn-grid build-actions">
           <button
             className={`btn${mode === 'road' ? ' primary' : ''}`}
             disabled={state.freeRoads === 0 && !afford(COSTS.road)}
             onClick={() => setMode(mode === 'road' ? null : 'road')}
           >
-            修路<span className="cost">{costText(COSTS.road)}</span>
+            修路
           </button>
           <button
             className={`btn${mode === 'settlement' ? ' primary' : ''}`}
             disabled={!afford(COSTS.settlement)}
             onClick={() => setMode(mode === 'settlement' ? null : 'settlement')}
           >
-            建房屋<span className="cost">{costText(COSTS.settlement)}</span>
+            建村
           </button>
           <button
             className={`btn${mode === 'city' ? ' primary' : ''}`}
             disabled={!afford(COSTS.city)}
             onClick={() => setMode(mode === 'city' ? null : 'city')}
           >
-            升级城市<span className="cost">{costText(COSTS.city)}</span>
+            升级
           </button>
           <button
             className="btn"
             disabled={!afford(COSTS.dev) || state.devDeck.length === 0}
             onClick={() => dispatch({ type: 'BUY_DEV' })}
           >
-            买发展卡<span className="cost">{costText(COSTS.dev)}</span>
+            发展
           </button>
         </div>
         {mode && (
@@ -1025,11 +1094,17 @@ function MainActions({
         )}
       </div>
 
-      <DevCards state={state} dispatch={dispatch} />
+      <DevCards state={state} seat={seat} dispatch={dispatch} />
 
-      <BankTrade game={game} dispatch={dispatch} />
+      <BankTrade game={game} seat={seat} dispatch={dispatch} />
 
-      <PlayerTrade game={game} flash={flash} />
+      <HumanNegotiation
+        game={game}
+        seat={seat}
+        humanTradeState={humanTradeState}
+        connected={connected}
+        flash={flash}
+      />
 
       <button className="btn warn" onClick={() => dispatch({ type: 'END_TURN' })}>
         结束回合
@@ -1040,8 +1115,16 @@ function MainActions({
 
 // ---------- 发展卡 ----------
 
-function DevCards({ state, dispatch }: { state: FullGame['state']; dispatch: (a: Action) => void }) {
-  const me = state.players[HUMAN];
+function DevCards({
+  state,
+  seat,
+  dispatch,
+}: {
+  state: FullGame['state'];
+  seat: number;
+  dispatch: (a: Action) => void;
+}) {
+  const me = state.players[seat];
   const [yop, setYop] = useState<[Resource, Resource]>(['木', '砖']);
   const [mono, setMono] = useState<Resource>('木');
 
@@ -1145,17 +1228,24 @@ function DevCards({ state, dispatch }: { state: FullGame['state']; dispatch: (a:
 
 // ---------- 银行交易 ----------
 
-function BankTrade({ game, dispatch }: { game: FullGame; dispatch: (a: Action) => void }) {
+function BankTrade({
+  game,
+  seat,
+  dispatch,
+}: {
+  game: FullGame;
+  seat: number;
+  dispatch: (a: Action) => void;
+}) {
   const { board, state } = game;
   const [give, setGive] = useState<Resource>('木');
   const [recv, setRecv] = useState<Resource>('矿');
-  const ratio = tradeRatio(board, state, HUMAN, give);
-  const me = state.players[HUMAN];
+  const ratio = tradeRatio(board, state, seat, give);
+  const me = state.players[seat];
   const ok = give !== recv && me.resources[give] >= ratio && state.bank[recv] > 0;
 
   return (
     <div className="card">
-      <h2>银行 / 港口交易</h2>
       <div className="tag-row" style={{ alignItems: 'center' }}>
         <select value={give} onChange={(e) => setGive(e.target.value as Resource)}>
           {RESOURCES.map((r) => (
@@ -1180,99 +1270,223 @@ function BankTrade({ game, dispatch }: { game: FullGame; dispatch: (a: Action) =
           兑换
         </button>
       </div>
-      <p className="cost">当前 {RESOURCE_LABEL[give]} 兑换比率 {ratio}:1（港口可降低）</p>
     </div>
   );
 }
 
-// ---------- 玩家交易 ----------
+// ---------- 真人交互谈判 ----------
 
-function PlayerTrade({
+function HumanNegotiation({
   game,
+  seat,
+  humanTradeState,
+  connected,
   flash,
+  dock = false,
 }: {
   game: FullGame;
+  seat: number;
+  humanTradeState: HumanTradeStateEvent;
+  connected: boolean;
   flash: (m: string) => void;
+  dock?: boolean;
 }) {
   const { state } = game;
-  const me = state.players[HUMAN];
+  const me = state.players[seat];
+  const aiPlayers = state.players.filter((p) => p.id !== seat && p.isAI);
   const [give, setGive] = useState<ResMap>(emptyRes());
   const [recv, setRecv] = useState<ResMap>(emptyRes());
-  const [target, setTarget] = useState<number>(1);
+  const [message, setMessage] = useState('');
   const [pending, setPending] = useState(false);
 
-  const propose = async () => {
-    const gN = RESOURCES.reduce((t, r) => t + give[r], 0);
-    const rN = RESOURCES.reduce((t, r) => t + recv[r], 0);
-    if (gN === 0 && rN === 0) {
-      flash('请先设置交易内容');
+  useEffect(() => {
+    if (!humanTradeState.active || humanTradeState.initiator !== seat) return;
+    const offer = humanTradeState.currentOffer;
+    if (!offer) return;
+    setGive({ ...offer.give });
+    setRecv({ ...offer.receive });
+  }, [humanTradeState.active, humanTradeState.sessionId, humanTradeState.initiator, seat]);
+
+  const submit = async (kind: 'start' | 'say') => {
+    const hasOffer = resTotal(give) + resTotal(recv) > 0;
+    if (kind === 'start' && !hasOffer && !message.trim()) {
+      flash('请填写喊话或设置一笔报价');
+      return;
+    }
+    const participants = aiPlayers.map((p) => p.id);
+    if (kind === 'start' && participants.length === 0) {
+      flash('至少选择一个 AI 参与谈判');
       return;
     }
     setPending(true);
-    const accepted = await proposeHumanTrade(target, give, recv);
+    const payload =
+      kind === 'start'
+        ? { give, receive: recv, message, participants }
+        : resTotal(give) + resTotal(recv) > 0
+          ? { give, receive: recv, message }
+          : { message };
+    const res = await emitAck(
+      kind === 'start' ? 'human_trade_start' : 'human_trade_say',
+      payload,
+    );
     setPending(false);
-    if (accepted) {
-      flash(`${state.players[target].name} 接受了交易`);
-      setGive(emptyRes());
-      setRecv(emptyRes());
-    } else {
-      flash(`${state.players[target].name} 拒绝了交易`);
+    if (!res.ok) {
+      flash(res.reason ?? '谈判请求失败');
+      return;
+    }
+    setMessage('');
+    if (kind === 'start') {
+      flash('谈判已发起');
     }
   };
 
+  const finalize = async (player: number) => {
+    setPending(true);
+    const res = await emitAck('human_trade_finalize', { player });
+    setPending(false);
+    if (!res.ok) flash(res.reason ?? '这笔交易暂时无法成交');
+  };
+
+  const endTrade = async () => {
+    setPending(true);
+    const res = await emitAck('human_trade_end', undefined);
+    setPending(false);
+    if (!res.ok) flash(res.reason ?? '结束谈判失败');
+    else flash('谈判已结束');
+  };
+
+  const busy = pending || humanTradeState.busy === true;
+  const activeMine = humanTradeState.active && humanTradeState.initiator === seat;
+  const maxed =
+    activeMine &&
+    humanTradeState.messagesUsed != null &&
+    humanTradeState.messagesMax != null &&
+    humanTradeState.messagesUsed >= humanTradeState.messagesMax;
+
   return (
-    <div className="card">
-      <h2>与 AI 玩家交易</h2>
-      <div className="tag-row" style={{ marginBottom: 8 }}>
-        {state.players
-          .filter((p) => p.id !== HUMAN)
-          .map((p) => (
-            <button
-              key={p.id}
-              className={`btn${target === p.id ? ' primary' : ''}`}
-              style={{ padding: '5px 10px' }}
-              onClick={() => setTarget(p.id)}
-            >
-              {p.name}
-            </button>
+    <div className={`card human-negotiation${dock ? ' trade-chat-dock' : ''}`}>
+      {activeMine ? (
+        <>
+          <div className="trade-limits human-trade-limits">
+            <span>
+              发言 {humanTradeState.messagesUsed ?? 0}/{humanTradeState.messagesMax ?? 0}
+            </span>
+            {humanTradeState.busy && <span>AI 思考中</span>}
+          </div>
+          {(humanTradeState.standingDeals ?? []).length > 0 && (
+            <div className="human-deals">
+              {(humanTradeState.standingDeals ?? []).map((deal) => (
+                <div key={`${deal.player}-${deal.source}`} className="human-deal">
+                  <div>
+                    <b>{deal.note}</b>
+                    <span>
+                      你给 {resSummary(deal.give)}，收到 {resSummary(deal.receive)}
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    className="btn good"
+                    disabled={busy || !connected}
+                    onClick={() => finalize(deal.player)}
+                  >
+                    成交
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </>
+      ) : null}
+
+      <details className="trade-quote-details">
+        <summary>
+          <span>报价</span>
+          <span>给 {resSummary(give)}</span>
+          <span>收 {resSummary(recv)}</span>
+        </summary>
+        <p className="cost">我给出：</p>
+        <div className="trade-grid">
+          {RESOURCES.map((r) => (
+            <div key={r} className="trade-cell">
+              <span className="trade-res-key" title={RESOURCE_LABEL[r]}>
+                {r}
+              </span>
+              <input
+                className="trade-number-input"
+                type="number"
+                min={0}
+                max={me.resources[r]}
+                value={give[r]}
+                onChange={(e) =>
+                  setGive((g) => ({
+                    ...g,
+                    [r]: clampNumberInput(e.currentTarget.value, me.resources[r]),
+                  }))
+                }
+              />
+            </div>
           ))}
+        </div>
+        <p className="cost" style={{ marginTop: 8 }}>
+          我想要：
+        </p>
+        <div className="trade-grid">
+          {RESOURCES.map((r) => (
+            <div key={r} className="trade-cell">
+              <span className="trade-res-key" title={RESOURCE_LABEL[r]}>
+                {r}
+              </span>
+              <input
+                className="trade-number-input"
+                type="number"
+                min={0}
+                max={19}
+                value={recv[r]}
+                onChange={(e) =>
+                  setRecv((g) => ({
+                    ...g,
+                    [r]: clampNumberInput(e.currentTarget.value, 19),
+                  }))
+                }
+              />
+            </div>
+          ))}
+        </div>
+      </details>
+      <textarea
+        className="human-trade-text"
+        value={message}
+        disabled={busy || !connected || Boolean(maxed)}
+        placeholder={activeMine ? '继续喊话或改价' : '发起喊话或报价'}
+        onChange={(e) => setMessage(e.target.value)}
+      />
+      <div className="human-trade-actions">
+        <button
+          className="btn"
+          disabled={busy || !connected || Boolean(maxed)}
+          onClick={() => submit(activeMine ? 'say' : 'start')}
+        >
+          {busy ? '等待回应…' : activeMine ? '发送' : '发起'}
+        </button>
+        {activeMine ? (
+          <button className="btn warn" disabled={pending || !connected} onClick={endTrade}>
+            结束谈判
+          </button>
+        ) : (
+          <button
+            className="btn"
+            disabled={busy}
+            onClick={() => {
+              setGive(emptyRes());
+              setRecv(emptyRes());
+              setMessage('');
+            }}
+          >
+            清空
+          </button>
+        )}
       </div>
-      <p className="cost">我给出：</p>
-      <div className="trade-grid">
-        {RESOURCES.map((r) => (
-          <div key={r} className="trade-cell">
-            <ResIcon r={r} size={18} />
-            <Stepper
-              value={give[r]}
-              max={me.resources[r]}
-              onChange={(v) => setGive((g) => ({ ...g, [r]: v }))}
-            />
-          </div>
-        ))}
-      </div>
-      <p className="cost" style={{ marginTop: 8 }}>
-        我想要：
-      </p>
-      <div className="trade-grid">
-        {RESOURCES.map((r) => (
-          <div key={r} className="trade-cell">
-            <ResIcon r={r} size={18} />
-            <Stepper
-              value={recv[r]}
-              max={19}
-              onChange={(v) => setRecv((g) => ({ ...g, [r]: v }))}
-            />
-          </div>
-        ))}
-      </div>
-      <button
-        className="btn"
-        style={{ marginTop: 10, width: '100%' }}
-        onClick={propose}
-        disabled={pending}
-      >
-        {pending ? '等待对方应答…' : '提议交易'}
-      </button>
+      {maxed && <p className="cost">本轮谈判发言次数已用完，可以成交或结束谈判。</p>}
     </div>
   );
 }
@@ -1281,13 +1495,15 @@ function PlayerTrade({
 
 function DiscardPanel({
   state,
+  seat,
   dispatch,
 }: {
   state: FullGame['state'];
+  seat: number;
   dispatch: (a: Action) => void;
 }) {
-  const me = state.players[HUMAN];
-  const need = state.discardLeft[HUMAN];
+  const me = state.players[seat];
+  const need = state.discardLeft[seat];
   const [sel, setSel] = useState<ResMap>(emptyRes());
   const picked = RESOURCES.reduce((t, r) => t + sel[r], 0);
 
@@ -1310,7 +1526,7 @@ function DiscardPanel({
         className="btn warn"
         style={{ marginTop: 10, width: '100%' }}
         disabled={picked !== need}
-        onClick={() => dispatch({ type: 'DISCARD', player: HUMAN, cards: sel })}
+        onClick={() => dispatch({ type: 'DISCARD', player: seat, cards: sel })}
       >
         确认弃牌
       </button>
@@ -1329,7 +1545,7 @@ function PendingTrade({ game, dispatch }: { game: FullGame; dispatch: (a: Action
       .join(' ') || '无';
   return (
     <div className="card">
-      <h2>{state.players[t.from].name} 的交易提议</h2>
+      <h2>{playerDisplayName(state.players, t.from)} 的交易提议</h2>
       <p className="cost">
         对方给你：{fmt(t.give)}
         <br />
@@ -1477,19 +1693,45 @@ function SidebarEventPanel({
   onTabChange,
   thoughtItems,
   tradeItems,
-  players,
-  state,
+  game,
+  mode,
+  setMode,
+  dispatch,
+  flash,
+  humanSeat,
+  humanTradeState,
+  connected,
+  hasHumanAttention,
 }: {
   activeTab: SidebarEventTab;
   onTabChange: (tab: SidebarEventTab) => void;
   thoughtItems: ThoughtLogItem[];
   tradeItems: TradeLogItem[];
-  players: FullGame['state']['players'];
-  state: FullGame['state'];
+  game: FullGame;
+  mode: BoardMode;
+  setMode: (mode: BoardMode) => void;
+  dispatch: (a: Action) => void;
+  flash: (m: string) => void;
+  humanSeat: number | null;
+  humanTradeState: HumanTradeStateEvent;
+  connected: boolean;
+  hasHumanAttention: boolean;
 }) {
+  const { state } = game;
+  const players = state.players;
   return (
     <div className="card card-plain sidebar-event-panel">
       <div className="sidebar-tabs" role="tablist" aria-label="AI 思考流与对局日志">
+        <button
+          type="button"
+          className={activeTab === 'human' ? 'active' : ''}
+          role="tab"
+          aria-selected={activeTab === 'human'}
+          onClick={() => onTabChange('human')}
+        >
+          我的操作
+          {hasHumanAttention && <span className="tab-dot" />}
+        </button>
         <button
           type="button"
           className={activeTab === 'thoughts' ? 'active' : ''}
@@ -1519,11 +1761,37 @@ function SidebarEventPanel({
         </button>
       </div>
       <div className="sidebar-tab-body">
+        {activeTab === 'human' && (
+          <div className="human-actions">
+            <Phase
+              game={game}
+              mode={mode}
+              setMode={setMode}
+              dispatch={dispatch}
+              flash={flash}
+              seat={humanSeat}
+              humanTradeState={humanTradeState}
+              connected={connected}
+            />
+          </div>
+        )}
         {activeTab === 'thoughts' && (
           <ThoughtLogContent items={thoughtItems} players={players} />
         )}
         {activeTab === 'trades' && (
-          <TradeLogContent items={tradeItems} players={players} />
+          <div className="trade-tab-layout">
+            <TradeLogContent items={tradeItems} players={players} />
+            {humanSeat != null && (
+              <HumanNegotiation
+                game={game}
+                seat={humanSeat}
+                humanTradeState={humanTradeState}
+                connected={connected}
+                flash={flash}
+                dock
+              />
+            )}
+          </div>
         )}
         {activeTab === 'log' && (
           <LogContent state={state} />
@@ -1625,6 +1893,8 @@ function decisionLabel(decision: TradeChatMessageEvent['decision']): string {
   switch (decision) {
     case 'PROPOSE':
       return '报价';
+    case 'CHAT':
+      return '喊话';
     case 'ACCEPT':
       return '接受';
     case 'REJECT':
@@ -1745,7 +2015,11 @@ function TradeLogContent({
   }, [items]);
 
   if (sessions.length === 0) {
-    return <p className="cost">等待 AI 发起交易…</p>;
+    return (
+      <div className="trade-log trade-log-empty">
+        <p className="cost">等待交易谈判…</p>
+      </div>
+    );
   }
 
   return (

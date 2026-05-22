@@ -164,6 +164,7 @@ export interface AiControlState {
 
 export type TradeDecisionEvent =
   | 'PROPOSE'
+  | 'CHAT'
   | 'ACCEPT'
   | 'REJECT'
   | 'COUNTER_OFFER'
@@ -232,4 +233,28 @@ export interface TradeChatClosedEvent {
   finalTrade?: TradeOfferEvent;
   limits: TradeLimitsEvent;
   ts: number;
+}
+
+/** 真人此刻可一键成交的一个候选，均从真人视角描述：真人给 give、收 receive */
+export interface HumanStandingDeal {
+  player: number;
+  give: ResMap;
+  receive: ResMap;
+  source: 'accept' | 'counter';
+  note: string;
+}
+
+/** 真人交互谈判的实时状态；每次真人发言或 AI 回应后广播 */
+export interface HumanTradeStateEvent {
+  active: boolean;
+  sessionId?: string;
+  turn?: number;
+  initiator?: number;
+  participants?: number[];
+  currentOffer?: TradeOfferEvent | null;
+  standingDeals?: HumanStandingDeal[];
+  messagesUsed?: number;
+  messagesMax?: number;
+  /** 服务端正在让 AI 逐个回应本轮喊话 / 报价，前端据此禁用输入 */
+  busy?: boolean;
 }

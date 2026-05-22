@@ -10,8 +10,9 @@
 //   5. AI-only 交易谈判编排与 trade_chat_* 可视化事件
 //   6. 广播 ai_thought / ai_error 供前端做决策可视化
 //   7. 提供 AI 自动 / 暂停 / 单步推进控制事件，便于观察 LLM 决策
+//   8. 支持观察者把席位切成真人，并与 AI 进行多轮交互谈判
 //
-// 不在本轮做：玩家身份认证、多房间匹配、断线续盘、持久化、人类加入谈判室。
+// 不在本轮做：玩家身份认证、多房间匹配、断线续盘、持久化。
 // ============================================================
 
 import { createServer } from 'http';
@@ -23,9 +24,13 @@ import { aiAcceptsTrade } from '../shared/ai';
 import { RESOURCES, type FullGame, type GameState, type ResMap } from '../shared/types';
 import type {
   AiControlState,
+  AiModelContextEvent,
   TradeChatClosedEvent,
   TradeChatMessageEvent,
   TradeChatStartedEvent,
+  TradeDecisionEvent,
+  TradeLimitsEvent,
+  TradeOfferEvent,
 } from '../shared/protocol';
 
 import type { AiDecisionProvider, AiErrorEvent, AiThoughtEvent, AiTimingEvent } from './llm/types';
@@ -50,11 +55,23 @@ import {
   type TradeInitiateFn,
 } from './trading/negotiationManager';
 import {
+  decideTradeChatResponse,
   decideTradeResponse,
   generateProposeMessage,
   decideTradeInitiation,
   buildCounterCandidates,
 } from './llm/tradeProvider';
+import {
+  HUMAN_TRADE_LIMITS,
+  cloneOffer,
+  cloneRes,
+  deriveStandingDeals,
+  emptyRes,
+  humanTradeStateEvent,
+  resTotal,
+  validateHumanOffer,
+  type HumanTradeSession,
+} from './trading/humanTrade';
 
 const PORT = Number(process.env.PORT ?? 3001);
 const AI_TICK_MS = Number(process.env.AI_TICK_MS ?? 460); // 每步 AI 之间的节奏
@@ -138,6 +155,10 @@ interface Session {
   aiEvents: AiEventLogEntry[];
   /** 环形 buffer：最近的交易谈判事件，便于晚来的客户端补齐上下文 */
   tradeEvents: TradeEventLogEntry[];
+  /** 进行中的真人交互谈判（同一房间一次一个） */
+  humanTrade: HumanTradeSession | null;
+  /** 真人谈判 session id 序号 */
+  humanTradeSeq: number;
 }
 
 const sessions = new Map<string, Session>();
@@ -159,6 +180,8 @@ function getSession(roomId: string): Session {
       tradeLedger: createAiTradeLedger(),
       aiEvents: [],
       tradeEvents: [],
+      humanTrade: null,
+      humanTradeSeq: 0,
     };
     sessions.set(roomId, s);
   }
@@ -290,6 +313,263 @@ function emitTradeEvent(io: Server, roomId: string, session: Session, entry: Tra
         ? 'trade_chat_message'
         : 'trade_chat_closed';
   io.to(roomId).emit(eventName, entry.data);
+}
+
+function emitHumanTradeState(io: Server, roomId: string, session = getSession(roomId)) {
+  io.to(roomId).emit(
+    'human_trade_state',
+    humanTradeStateEvent(session.game.board, session.game.state, session.humanTrade),
+  );
+}
+
+function humanLimits(session: HumanTradeSession): TradeLimitsEvent {
+  const repliesByPlayer: Record<number, number> = {};
+  for (const player of session.participants) {
+    repliesByPlayer[player] = session.stances[player]?.decision ? 1 : 0;
+  }
+  return {
+    messagesUsed: session.humanMessages,
+    messagesMax: HUMAN_TRADE_LIMITS.messagesPerSession,
+    offersUsed: session.currentOffer ? 1 : 0,
+    offersMax: 1,
+    counterOffersUsed: Object.values(session.stances).filter(
+      (stance) => stance.decision === 'COUNTER_OFFER',
+    ).length,
+    counterOffersMax: session.participants.length,
+    repliesByPlayer,
+    repliesMaxPerPlayer: 1,
+    sessionsUsedByInitiator: 1,
+    sessionsMaxPerTurn: 1,
+  };
+}
+
+function normalizeResMap(raw: unknown): ResMap {
+  const out = emptyRes();
+  if (!raw || typeof raw !== 'object') return out;
+  const obj = raw as Record<string, unknown>;
+  for (const r of RESOURCES) {
+    const n = obj[r];
+    if (typeof n === 'number' && Number.isFinite(n) && n > 0) out[r] = Math.floor(n);
+  }
+  return out;
+}
+
+function pushHumanTradeMessage(
+  io: Server,
+  roomId: string,
+  trade: HumanTradeSession,
+  speaker: number | null,
+  decision: TradeDecisionEvent,
+  message: string,
+  offer?: TradeOfferEvent,
+  meta?: { modelContext?: AiModelContextEvent; rawOutput?: string; provider?: string },
+) {
+  const session = getSession(roomId);
+  const data: TradeChatMessageEvent = {
+    sessionId: trade.sessionId,
+    turn: trade.turn,
+    speaker,
+    decision,
+    message,
+    offer: offer ? cloneOffer(offer) : undefined,
+    limits: humanLimits(trade),
+    modelContext: meta?.modelContext,
+    rawOutput: meta?.rawOutput,
+    provider: meta?.provider,
+    ts: Date.now(),
+  };
+  trade.messages.push(data);
+  emitTradeEvent(io, roomId, session, { kind: 'message', data });
+}
+
+function closeHumanTrade(
+  io: Server,
+  roomId: string,
+  status: TradeChatClosedEvent['status'],
+  reason: string,
+  finalTrade?: TradeOfferEvent,
+) {
+  const session = getSession(roomId);
+  const trade = session.humanTrade;
+  if (!trade || trade.status !== 'open') {
+    emitHumanTradeState(io, roomId, session);
+    return;
+  }
+  const data: TradeChatClosedEvent = {
+    sessionId: trade.sessionId,
+    turn: trade.turn,
+    status,
+    reason,
+    finalTrade: finalTrade ? cloneOffer(finalTrade) : undefined,
+    limits: humanLimits(trade),
+    ts: Date.now(),
+  };
+  trade.status = 'closed';
+  session.humanTrade = null;
+  emitTradeEvent(io, roomId, session, { kind: 'closed', data });
+  emitHumanTradeState(io, roomId, session);
+}
+
+function closeHumanTradeIfStale(io: Server, roomId: string, session = getSession(roomId)) {
+  const trade = session.humanTrade;
+  if (!trade || trade.status !== 'open') return;
+  const { state } = session.game;
+  if (state.phase === 'main' && state.current === trade.initiator) return;
+  closeHumanTrade(io, roomId, 'rejected', '局面变化，真人谈判结束');
+}
+
+function rememberTradeReply(
+  session: Session,
+  player: number,
+  decision: TradeDecisionEvent,
+  message: string,
+) {
+  const agent = session.agents[player];
+  if (!agent) return;
+  rememberAgentDecision(agent, {
+    phase: session.game.state.phase,
+    actionSummary: `真人谈判回应：${decision}`,
+    thought: message,
+  });
+}
+
+async function runHumanTradeRound(io: Server, roomId: string, trade: HumanTradeSession) {
+  const session = getSession(roomId);
+  if (session.humanTrade !== trade || trade.status !== 'open') return;
+  const startVersion = session.version;
+  const { board } = session.game;
+
+  for (const player of trade.participants) {
+    const state = session.game.state;
+    if (!state.players[player]?.isAI) continue;
+    if (session.humanTrade !== trade || trade.status !== 'open') return;
+
+    const agent = session.agents[player];
+    const providerName = agent?.providerName ?? session.aiProvider;
+
+    if (!trade.currentOffer) {
+      const resp = await decideTradeChatResponse(
+        {
+          state,
+          responderId: player,
+          history: trade.messages,
+          agent: agent ? toAgentPromptContext(agent) : undefined,
+        },
+        providerName,
+      );
+      if (session.version !== startVersion || session.humanTrade !== trade || trade.status !== 'open') {
+        return;
+      }
+      pushHumanTradeMessage(
+        io,
+        roomId,
+        trade,
+        player,
+        'CHAT',
+        resp.message || '我听到了，先看看你具体想怎么换。',
+        undefined,
+        { modelContext: resp.modelContext, rawOutput: resp.rawOutput, provider: resp.provider },
+      );
+      rememberTradeReply(session, player, 'CHAT', resp.message);
+      emitHumanTradeState(io, roomId, session);
+      continue;
+    }
+
+    const directOffer: TradeOfferEvent = {
+      from: trade.initiator,
+      to: player,
+      give: cloneRes(trade.currentOffer.give),
+      receive: cloneRes(trade.currentOffer.receive),
+    };
+    const counterCandidates = buildCounterCandidates(state, directOffer);
+    const resp = await decideTradeResponse(
+      {
+        board,
+        state,
+        responderId: player,
+        offer: directOffer,
+        history: trade.messages,
+        counterCandidates,
+        agent: agent ? toAgentPromptContext(agent) : undefined,
+      },
+      providerName,
+    );
+
+    if (session.version !== startVersion || session.humanTrade !== trade || trade.status !== 'open') {
+      return;
+    }
+
+    let msgOffer: TradeOfferEvent | undefined;
+    if (resp.decision === 'ACCEPT') {
+      trade.stances[player] = { player, decision: 'ACCEPT' };
+      msgOffer = cloneOffer(directOffer);
+    } else if (resp.decision === 'COUNTER_OFFER') {
+      const candidate = counterCandidates.find((c) => c.id === resp.counterId);
+      if (candidate) {
+        trade.stances[player] = {
+          player,
+          decision: 'COUNTER_OFFER',
+          counter: {
+            give: cloneRes(candidate.give),
+            receive: cloneRes(candidate.receive),
+            note: candidate.label,
+          },
+        };
+        msgOffer = {
+          from: player,
+          to: trade.initiator,
+          give: cloneRes(candidate.give),
+          receive: cloneRes(candidate.receive),
+        };
+      } else {
+        trade.stances[player] = { player, decision: 'REJECT' };
+      }
+    } else {
+      trade.stances[player] = { player, decision: 'REJECT' };
+    }
+
+    pushHumanTradeMessage(
+      io,
+      roomId,
+      trade,
+      player,
+      trade.stances[player].decision ?? 'REJECT',
+      resp.message || '我暂时不接受这笔交易。',
+      msgOffer,
+      { modelContext: resp.modelContext, rawOutput: resp.rawOutput, provider: resp.provider },
+    );
+    rememberTradeReply(session, player, trade.stances[player].decision ?? 'REJECT', resp.message);
+    emitHumanTradeState(io, roomId, session);
+  }
+}
+
+function runHumanTradeRoundWithBusy(io: Server, roomId: string, trade: HumanTradeSession) {
+  const session = getSession(roomId);
+  if (session.humanTrade !== trade || trade.status !== 'open') {
+    emitHumanTradeState(io, roomId, session);
+    return;
+  }
+  trade.busy = true;
+  emitHumanTradeState(io, roomId, session);
+  void runHumanTradeRound(io, roomId, trade)
+    .catch((err) => {
+      console.warn('[catan-server] 真人谈判 AI 回应失败:', err);
+      if (session.humanTrade === trade && trade.status === 'open') {
+        pushHumanTradeMessage(
+          io,
+          roomId,
+          trade,
+          null,
+          'SYSTEM',
+          `AI 回应失败：${(err as Error).message}`,
+        );
+      }
+    })
+    .finally(() => {
+      if (session.humanTrade !== trade || trade.status !== 'open') return;
+      trade.busy = false;
+      emitHumanTradeState(io, roomId, session);
+    });
 }
 
 
@@ -610,13 +890,19 @@ io.on('connection', (socket: Socket) => {
       entry.data,
     );
   }
+  socket.emit(
+    'human_trade_state',
+    humanTradeStateEvent(session.game.board, session.game.state, session.humanTrade),
+  );
 
   // 玩家动作：直接喂给 reducer
   // TODO（待身份层）：现阶段任何 socket 都能 dispatch 任意 action；
   // reducer 会按 state.current 归因，所以非当前玩家的动作不会"代签"，
   // 但可能干扰当前玩家的决策面。后期加 player binding。
   socket.on('dispatch', (action: Action) => {
+    const s = getSession(DEFAULT_ROOM);
     applyAction(io, DEFAULT_ROOM, action);
+    closeHumanTradeIfStale(io, DEFAULT_ROOM, s);
     scheduleAI(io, DEFAULT_ROOM);
   });
 
@@ -684,16 +970,59 @@ io.on('connection', (socket: Socket) => {
       ack?: (r: { ok: boolean }) => void,
     ) => {
       const s = getSession(DEFAULT_ROOM);
+      if (payload.provider === 'human') {
+        if (typeof payload.player !== 'number') {
+          ack?.({ ok: false });
+          return;
+        }
+        const player = s.game.state.players[payload.player];
+        if (!player) {
+          ack?.({ ok: false });
+          return;
+        }
+        player.isAI = false;
+        if (s.aiTimer && s.game.state.current === payload.player) {
+          clearTimeout(s.aiTimer);
+          s.aiTimer = null;
+        }
+        // 席位归属是权威状态的一部分；递增版本也会作废飞行中的旧 AI 决策。
+        s.version++;
+        broadcastState(io, DEFAULT_ROOM);
+        emitAiControl(io, DEFAULT_ROOM, s);
+        scheduleAI(io, DEFAULT_ROOM);
+        ack?.({ ok: true });
+        return;
+      }
+
       const next = normalizeProviderName(payload.provider);
       if (typeof payload.player === 'number') {
+        const player = s.game.state.players[payload.player];
+        if (!player) {
+          ack?.({ ok: false });
+          return;
+        }
+        const wasAI = player.isAI;
+        player.isAI = true;
+        if (!s.agents[payload.player]) {
+          const created = createAgentRuntimes(s.game.state, next)[payload.player];
+          if (created) s.agents[payload.player] = created;
+        }
         const agent = s.agents[payload.player];
         if (!agent) {
           ack?.({ ok: false });
           return;
         }
         agent.providerName = next;
-        // 仅当被切换的是当前正在思考的玩家时，作废飞行中的 LLM 决策
+        // 仅当被切换的是当前正在思考的玩家时，作废飞行中的 LLM 决策；
+        // 从真人切回 AI 还要同步权威状态。
         if (s.aiBusy && s.game.state.current === payload.player) s.version++;
+        if (!wasAI) {
+          if (s.humanTrade?.initiator === payload.player) {
+            closeHumanTrade(io, DEFAULT_ROOM, 'rejected', '真人席位已切回 AI');
+          }
+          s.version++;
+          broadcastState(io, DEFAULT_ROOM);
+        }
       } else {
         s.aiProvider = next;
         for (const agent of Object.values(s.agents)) {
@@ -702,9 +1031,213 @@ io.on('connection', (socket: Socket) => {
         if (s.aiBusy) s.version++;
       }
       emitAiControl(io, DEFAULT_ROOM, s);
+      scheduleAI(io, DEFAULT_ROOM);
       ack?.({ ok: true });
     },
   );
+
+  socket.on(
+    'human_trade_start',
+    (
+      payload: { give?: ResMap; receive?: ResMap; message?: string; participants?: number[] } = {},
+      ack?: (r: { ok: boolean; reason?: string }) => void,
+    ) => {
+      const s = getSession(DEFAULT_ROOM);
+      const { state } = s.game;
+      const initiator = state.current;
+      if (state.phase !== 'main' || state.players[initiator]?.isAI !== false) {
+        ack?.({ ok: false, reason: '只有真人自己的主阶段可以发起谈判' });
+        return;
+      }
+
+      const give = normalizeResMap(payload.give);
+      const receive = normalizeResMap(payload.receive);
+      const message = (payload.message ?? '').trim();
+      const hasOffer = resTotal(give) + resTotal(receive) > 0;
+      if (!hasOffer && !message) {
+        ack?.({ ok: false, reason: '请填写喊话或设置一笔报价' });
+        return;
+      }
+      if (hasOffer) {
+        const reason = validateHumanOffer(state, initiator, give, receive);
+        if (reason) {
+          ack?.({ ok: false, reason });
+          return;
+        }
+      }
+
+      const requested = Array.isArray(payload.participants) ? payload.participants : [];
+      const participants = [
+        ...new Set(
+          (requested.length > 0 ? requested : state.players.map((p) => p.id)).filter(
+            (player) => player !== initiator && state.players[player]?.isAI,
+          ),
+        ),
+      ];
+      if (participants.length === 0) {
+        ack?.({ ok: false, reason: '当前没有可参与谈判的 AI 席位' });
+        return;
+      }
+
+      if (s.humanTrade?.status === 'open') {
+        closeHumanTrade(io, DEFAULT_ROOM, 'rejected', '真人开始了新的谈判');
+      }
+
+      s.humanTradeSeq++;
+      const currentOffer: TradeOfferEvent | null = hasOffer
+        ? { from: initiator, to: null, give, receive }
+        : null;
+      const trade: HumanTradeSession = {
+        sessionId: `human-trade-t${state.turn}-p${initiator}-${s.humanTradeSeq}`,
+        turn: state.turn,
+        initiator,
+        participants,
+        currentOffer,
+        messages: [],
+        stances: {},
+        humanMessages: 1,
+        status: 'open',
+        busy: false,
+      };
+      s.humanTrade = trade;
+
+      emitTradeEvent(io, DEFAULT_ROOM, s, {
+        kind: 'started',
+        data: {
+          sessionId: trade.sessionId,
+          turn: trade.turn,
+          phase: state.phase,
+          initiator,
+          participants,
+          proposedTrade: currentOffer
+            ? cloneOffer(currentOffer)
+            : { from: initiator, to: null, give: emptyRes(), receive: emptyRes() },
+          limits: humanLimits(trade),
+          ts: Date.now(),
+        },
+      });
+      pushHumanTradeMessage(
+        io,
+        DEFAULT_ROOM,
+        trade,
+        initiator,
+        'PROPOSE',
+        message || '我想谈一笔资源交换。',
+        currentOffer ?? undefined,
+      );
+      emitHumanTradeState(io, DEFAULT_ROOM, s);
+      ack?.({ ok: true });
+      runHumanTradeRoundWithBusy(io, DEFAULT_ROOM, trade);
+    },
+  );
+
+  socket.on(
+    'human_trade_say',
+    (
+      payload: { message?: string; give?: ResMap; receive?: ResMap } = {},
+      ack?: (r: { ok: boolean; reason?: string }) => void,
+    ) => {
+      const s = getSession(DEFAULT_ROOM);
+      const trade = s.humanTrade;
+      const { state } = s.game;
+      if (!trade || trade.status !== 'open') {
+        ack?.({ ok: false, reason: '当前没有进行中的真人谈判' });
+        return;
+      }
+      if (state.phase !== 'main' || state.current !== trade.initiator) {
+        ack?.({ ok: false, reason: '当前局面已不能继续这轮谈判' });
+        return;
+      }
+      if (trade.busy) {
+        ack?.({ ok: false, reason: 'AI 正在回应上一轮喊话' });
+        return;
+      }
+      if (trade.humanMessages >= HUMAN_TRADE_LIMITS.messagesPerSession) {
+        ack?.({ ok: false, reason: '本轮谈判发言次数已用完' });
+        return;
+      }
+
+      const message = (payload.message ?? '').trim();
+      const hasNewOffer =
+        Object.prototype.hasOwnProperty.call(payload, 'give') ||
+        Object.prototype.hasOwnProperty.call(payload, 'receive');
+      let msgOffer: TradeOfferEvent | undefined;
+      if (hasNewOffer) {
+        const give = normalizeResMap(payload.give);
+        const receive = normalizeResMap(payload.receive);
+        const reason = validateHumanOffer(state, trade.initiator, give, receive);
+        if (reason) {
+          ack?.({ ok: false, reason });
+          return;
+        }
+        trade.currentOffer = { from: trade.initiator, to: null, give, receive };
+        trade.stances = {};
+        msgOffer = cloneOffer(trade.currentOffer);
+      }
+      if (!message && !hasNewOffer) {
+        ack?.({ ok: false, reason: '请输入喊话或调整报价' });
+        return;
+      }
+
+      trade.humanMessages++;
+      pushHumanTradeMessage(
+        io,
+        DEFAULT_ROOM,
+        trade,
+        trade.initiator,
+        'PROPOSE',
+        message || '我调整一下报价。',
+        msgOffer,
+      );
+      emitHumanTradeState(io, DEFAULT_ROOM, s);
+      ack?.({ ok: true });
+      runHumanTradeRoundWithBusy(io, DEFAULT_ROOM, trade);
+    },
+  );
+
+  socket.on(
+    'human_trade_finalize',
+    (payload: { player?: number } = {}, ack?: (r: { ok: boolean; reason?: string }) => void) => {
+      const s = getSession(DEFAULT_ROOM);
+      const trade = s.humanTrade;
+      if (!trade || trade.status !== 'open') {
+        ack?.({ ok: false, reason: '当前没有可成交的真人谈判' });
+        return;
+      }
+      if (trade.busy) {
+        ack?.({ ok: false, reason: 'AI 正在回应，稍后再成交' });
+        return;
+      }
+      const deal = deriveStandingDeals(s.game.board, s.game.state, trade).find(
+        (d) => d.player === payload.player,
+      );
+      if (!deal) {
+        ack?.({ ok: false, reason: '这名 AI 当前没有可执行的成交候选' });
+        return;
+      }
+      const finalTrade: TradeOfferEvent = {
+        from: trade.initiator,
+        to: deal.player,
+        give: cloneRes(deal.give),
+        receive: cloneRes(deal.receive),
+      };
+      applyAction(io, DEFAULT_ROOM, {
+        type: 'TRADE_EXECUTE',
+        from: finalTrade.from,
+        to: deal.player,
+        give: finalTrade.give,
+        receive: finalTrade.receive,
+      });
+      closeHumanTrade(io, DEFAULT_ROOM, 'accepted', deal.note, finalTrade);
+      emitAiControl(io, DEFAULT_ROOM);
+      ack?.({ ok: true });
+    },
+  );
+
+  socket.on('human_trade_end', (ack?: (r: { ok: boolean }) => void) => {
+    closeHumanTrade(io, DEFAULT_ROOM, 'rejected', '真人结束谈判');
+    ack?.({ ok: true });
+  });
 
   socket.on('step_ai', (ack?: (r: { ok: boolean; reason?: string }) => void) => {
     const s = getSession(DEFAULT_ROOM);
@@ -734,7 +1267,11 @@ io.on('connection', (socket: Socket) => {
     for (const [id, agent] of Object.entries(s.agents)) {
       savedProviders[Number(id)] = agent.providerName;
     }
+    const savedHumanSeats = s.game.state.players.filter((p) => !p.isAI).map((p) => p.id);
     s.game = createServerGame();
+    for (const id of savedHumanSeats) {
+      if (s.game.state.players[id]) s.game.state.players[id].isAI = false;
+    }
     s.version++;
     s.stall = { sig: '', count: 0 };
     s.agents = createAgentRuntimes(s.game.state, s.aiProvider);
@@ -745,7 +1282,10 @@ io.on('connection', (socket: Socket) => {
     s.tradeLedger = createAiTradeLedger();
     s.aiEvents = [];
     s.tradeEvents = [];
+    s.humanTrade = null;
+    s.humanTradeSeq = 0;
     broadcastState(io, DEFAULT_ROOM);
+    emitHumanTradeState(io, DEFAULT_ROOM, s);
     emitAiControl(io, DEFAULT_ROOM, s);
     scheduleAI(io, DEFAULT_ROOM);
   });
