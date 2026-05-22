@@ -16,6 +16,7 @@ export type {
   AiThoughtEvent,
   AiErrorEvent,
   AiModelContextEvent,
+  AiModelOutputEvent,
   AiTimingEvent,
   AiTimingStage,
 } from '../../shared/protocol';
@@ -74,6 +75,12 @@ export interface LlmDecisionOutput {
   turnGoal?: string;
   /** 长期策略阶段（可选；与上一次大致一致就别变） */
   stance?: string;
+  /**
+   * 模型返回的原始文本（JSON 解析之前）。仅真实 LLM Provider 填，
+   * 供 controller 生成 modelOutput 快照、前端"模型输出"面板展示。
+   * rule/mock 没有原始文本，留空。
+   */
+  raw?: string;
 }
 
 /** Provider 抽象：rule / mock / 真实 LLM 实现这一个接口 */

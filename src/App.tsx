@@ -7,6 +7,7 @@ import type {
   AiControlState,
   AiErrorEvent,
   AiModelContextEvent,
+  AiModelOutputEvent,
   AiTimingEvent,
   AiThoughtEvent,
   TradeChatClosedEvent,
@@ -1407,6 +1408,23 @@ function ModelContextPanel({ context }: { context: AiModelContextEvent }) {
   );
 }
 
+function ModelOutputPanel({ output }: { output: AiModelOutputEvent }) {
+  const label = output.format === 'llm-raw' ? '模型输出' : 'Provider 输出';
+  return (
+    <details className="thought-context">
+      <summary>
+        <span>{label}</span>
+        <span>{countText(output.chars.total)} 字</span>
+        {output.format === 'llm-raw' && output.chars.raw != null && (
+          <span>原始 {countText(output.chars.raw)}</span>
+        )}
+      </summary>
+      <ModelContextBlock title="raw" text={output.rawOutput} />
+      <ModelContextBlock title="parsed" text={output.parsedJson} />
+    </details>
+  );
+}
+
 function TradeMessageDebug({
   modelContext,
   rawOutput,
@@ -1548,6 +1566,7 @@ function ThoughtLogContent({
                   )}
                   {t.timing && <TimingPanel timing={t.timing} />}
                   {t.modelContext && <ModelContextPanel context={t.modelContext} />}
+                  {t.modelOutput && <ModelOutputPanel output={t.modelOutput} />}
                 </div>
               );
             }
@@ -1564,6 +1583,15 @@ function ThoughtLogContent({
                 <div className="thought-text">{e.message}</div>
                 {e.timing && <TimingPanel timing={e.timing} />}
                 {e.modelContext && <ModelContextPanel context={e.modelContext} />}
+                {e.rawOutput && (
+                  <details className="thought-context">
+                    <summary>
+                      <span>模型输出</span>
+                      <span>{countText(e.rawOutput.length)} 字</span>
+                    </summary>
+                    <ModelContextBlock title="raw" text={e.rawOutput} />
+                  </details>
+                )}
               </div>
             );
           })}

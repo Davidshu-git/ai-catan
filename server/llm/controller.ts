@@ -26,6 +26,7 @@ import type {
   AiDecisionProvider,
   AiErrorEvent,
   AiModelContextEvent,
+  AiModelOutputEvent,
   AiTimingEvent,
   AiTimingStage,
   AiThoughtEvent,
@@ -191,6 +192,7 @@ export async function decideAiStep(
           actionHint: result.action.hint,
           action: result.action.action,
           modelContext,
+          modelOutput: buildModelOutput(provider.name, output),
           timing: currentTiming(),
           provider: provider.name,
           retries: attempt,
@@ -208,7 +210,8 @@ export async function decideAiStep(
       phase: state.phase,
       provider: provider.name,
       message: result.message,
-      rawOutput: JSON.stringify(output),
+      // LLM 有原始文本时优先展示真实模型输出，便于排查（rule/mock 退回结构化决策）
+      rawOutput: output.raw ?? JSON.stringify(output),
       modelContext,
       timing: currentTiming(),
       retries: attempt,
@@ -253,6 +256,7 @@ export async function decideAiStep(
           actionHint: ruleCheck.action.hint,
           action: ruleCheck.action.action,
           modelContext: ruleContext,
+          modelOutput: buildModelOutput(ruleProvider.name, ruleOutput),
           timing: currentTiming(),
           provider: `${provider.name}→rule`,
           retries: MAX_PROVIDER_RETRIES + 1,
@@ -351,6 +355,36 @@ function buildModelContext(
       providerInput: providerInputJson.length,
     },
     providerInputJson,
+  };
+}
+
+function buildModelOutput(
+  providerName: string,
+  output: LlmDecisionOutput,
+): AiModelOutputEvent {
+  const parsedJson = JSON.stringify(
+    {
+      thought: output.thought,
+      actionId: output.actionId,
+      turnGoal: output.turnGoal ?? null,
+      stance: output.stance ?? null,
+    },
+    null,
+    2,
+  );
+  // 只有真实 LLM Provider 会带原始文本；rule/mock 仅有结构化决策
+  const isLlm = providerName.startsWith('llm(') || providerName.startsWith('qwen(');
+  const raw = isLlm ? output.raw : undefined;
+  return {
+    provider: providerName,
+    format: raw != null ? 'llm-raw' : 'structured',
+    rawOutput: raw,
+    parsedJson,
+    chars: {
+      raw: raw != null ? raw.length : undefined,
+      parsed: parsedJson.length,
+      total: (raw != null ? raw.length : 0) + parsedJson.length,
+    },
   };
 }
 

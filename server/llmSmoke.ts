@@ -72,6 +72,7 @@ const view: PlayerView = {
   },
   recentLog: ['你的回合开始', '你掷出 7 → 已结算'],
   pendingTradeForMe: null,
+  setup: null,
 };
 
 const legalActions: LegalAction[] = [

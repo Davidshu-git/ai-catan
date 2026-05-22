@@ -37,6 +37,7 @@ export const LLM_SYSTEM_PROMPT = `你是卡坦岛策略助手，正在替一名 
 - 资源产出：每回合掷两颗骰子，点数之和等于某地块数字时，与该地块相邻的房屋各产 1 张、城市各产 2 张对应资源；强盗所在地块本回合不产出。hint 里的"产出点"是该数字的概率权重（6/8 最高约 5 点，2/12 最低 1 点），越高越易产。
 - 发展卡效果：骑士=移动强盗并从相邻对手偷 1 张牌（计入最大军队）；修路=立刻免费建 2 条路；丰收=从银行任取 2 张资源；垄断=指定 1 种资源，所有对手把手里该资源全交给你；胜利点=立即 +1 分且隐藏（不进手牌、不占"每回合限打 1 张"名额）。每回合最多打 1 张发展卡；当回合新购的发展卡下回合才能用。
 - 建造上限：房屋最多 5、城市最多 4、道路最多 15；城市是把自己已有的房屋升级而成。
+- 建造连通规则（依赖关系，规划时必须考虑）：①道路必须接在你已有的道路、房屋或城市旁，不能凭空建在路网之外；对手的房屋/城市会截断路网、无法穿过它继续延伸；想到远处的好点得一段段连续铺路过去。②主回合建房屋除满足距离规则外，还必须建在与你自己道路相邻的顶点上（setup 开局摆放例外，不需连路）。③城市只能把你自己已有的房屋原地升级，不能凭空新建——所以"升城"的前提是该点已有你的房屋。
 - 交易比率：与银行默认 4:1，拥有"通用"港口降到 3:1，拥有某资源专属港口则该资源降到 2:1；view 里 self.tradeRatio 已给出你每种资源的当前最优比率。
 - 开局摆放（setup）：每人先后放 2 个房屋各带 1 条路，蛇形顺序。放**第二个房屋**时会立刻从相邻每个非沙漠地块各领 1 张资源——所以第二个点除了看长期产出，也要顾及这一把启动资源能否让你第一回合就开建（如凑出木+砖修路、或补齐第一个点缺的资源种类）。
 - 信息隐藏：你看不到对手的具体手牌种类和发展卡类别，只能看到他们的手牌总数（handSize）和发展卡总数（devCardCount）。因此打"垄断"是在赌对手某资源的持有量、对强盗/偷牌目标的收益也只能按手牌总数估算，要在不确定下决策，别假装已知对手底牌。
@@ -95,6 +96,7 @@ export function formatView(view: PlayerView): string {
     ports: view.ports,
     pendingTradeForMe: view.pendingTradeForMe,
     recentLog: view.recentLog,
+    ...(view.setup ? { setup: view.setup } : {}),
   });
 }
 
@@ -138,6 +140,7 @@ function formatDynamicView(view: PlayerView): string {
     myBuildings: view.myBuildings,
     pendingTradeForMe: view.pendingTradeForMe,
     recentLog: view.recentLog,
+    ...(view.setup ? { setup: view.setup } : {}),
   });
 }
 
@@ -166,6 +169,23 @@ export interface LlmContentBlock {
 export interface LlmRequestBlocks {
   system: LlmContentBlock[];
   userBlocks: LlmContentBlock[];
+}
+
+/**
+ * setup 阶段专项指引：只在 setup1/setup2 注入。
+ * 故意放在动态 user 段而非常驻 system prompt——主回合不需要、也不冲掉 system 段的 prompt cache。
+ * 讲清蛇形顺序带来的"先到先得 + 落子即封锁"博弈，legalActions 已按距离规则过滤。
+ */
+function setupPhaseGuidance(phase: PlayerView['phase']): string | null {
+  if (phase !== 'setup1' && phase !== 'setup2') return null;
+  return [
+    '【开局选点专项（仅 setup 阶段）】',
+    '- 顺序是蛇形：第一轮按座位正序每人放 1 房屋 + 1 路，第二轮逆序再各放 1 房屋 + 1 路。结果是越靠后的座位两次选点挨得越近、越靠前的座位两次选点隔得越远。',
+    '- 看 view.setup 字段定位你的处境：order 是完整蛇形顺序（玩家 id 序列），index 是当前轮到的下标（就是你），myIndices 是你在序列里的两个下标，pickedBefore 是已经选过的玩家（他们具体选了哪些点见各自 others[].settlementSummaries 和你自己的 myBuildings.settlementSummaries），comingAfter 是你这一手之后还要选的对手。',
+    '- 据此判断竞争与封锁：pickedBefore 的人已把他们的好点和相邻顶点占死；comingAfter 的对手会在你下一次落子前继续抢点、并可能封掉你想要的位置。所以①别指望"留到下次再拿"，当前最优点立刻拿下；②选点本身也是进攻——优先抢那些既肥（产出高、资源种类多）又是 comingAfter 对手必争的关键点，顺手堵死对方；③若你两个下标隔得远（靠前座位），更要珍惜这一手。',
+    '- 第二个房屋（setup2）落子即从相邻每个非沙漠地块各领 1 张启动资源；除看长期产出，也要顾及这把启动资源能否让你第一回合就开建（凑木+砖修路 / 补第一个点缺的资源种类）。',
+    '- legalActions 已按距离规则过滤掉所有被封死的顶点，你只需在剩余点里挑最优。',
+  ].join('\n');
 }
 
 /**
@@ -205,6 +225,11 @@ export function buildLlmRequestBlocks(
   dynamicParts.push('当前局面（你的视角，JSON）：');
   dynamicParts.push(formatDynamicView(input.view));
   dynamicParts.push('');
+  const setupGuide = setupPhaseGuidance(input.view.phase);
+  if (setupGuide) {
+    dynamicParts.push(setupGuide);
+    dynamicParts.push('');
+  }
   const hintLegend = useHint
     ? '每行格式：actionId<TAB>label<TAB>hint（hint 是该空间动作的资源/概率/敌我分布情报，仅空间动作有）。'
     : '每行格式：actionId<TAB>label。';
@@ -379,6 +404,7 @@ export function createLlmProvider(opts: LlmProviderOptions): AiDecisionProvider 
         actionId: p.actionId.trim(),
         turnGoal: turnGoal && turnGoal.length > 0 ? turnGoal : undefined,
         stance: stance && stance.length > 0 ? stance : undefined,
+        raw,
       };
     },
   };

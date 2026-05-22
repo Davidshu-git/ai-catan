@@ -33,6 +33,24 @@ export interface AiModelContextEvent {
   providerInputJson?: string;
 }
 
+export interface AiModelOutputEvent {
+  /** 产生该输出的 Provider 名称 */
+  provider: string;
+  /** llm-raw = 真实模型返回的原始文本（解析前）；structured = rule/mock 仅有结构化决策 */
+  format: 'llm-raw' | 'structured';
+  /** 模型返回的原始文本（JSON 解析之前）；仅真实 LLM Provider 有 */
+  rawOutput?: string;
+  /** 最终采用的结构化决策（thought / actionId / turnGoal / stance）JSON 字符串 */
+  parsedJson: string;
+  chars: {
+    /** 原始文本字数；仅 LLM 有 */
+    raw?: number;
+    /** 结构化决策 JSON 字数 */
+    parsed: number;
+    total: number;
+  };
+}
+
 export interface AiTimingStage {
   /** 稳定阶段 key，便于前端归类，例如 provider / checker / catalog */
   key: string;
@@ -83,6 +101,8 @@ export interface AiThoughtEvent {
   action?: Action;
   /** Provider / LLM 本次决策拿到的上下文输入快照，供前端分析 prompt 冗余 */
   modelContext?: AiModelContextEvent;
+  /** Provider / LLM 本次决策返回的输出快照（原始文本 + 解析结果），与 modelContext 对应 */
+  modelOutput?: AiModelOutputEvent;
   /** 本次 AI 调用链路的服务端阶段耗时 */
   timing?: AiTimingEvent;
   provider: string;

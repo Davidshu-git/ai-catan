@@ -68,6 +68,24 @@ export interface OtherPlayerView {
   longestRoadLen: number;
 }
 
+/** 开局选点的蛇形顺序情报；仅 setup1/setup2 阶段有 */
+export interface SetupDraftView {
+  /** 第几轮：1 = 正序首轮，2 = 逆序次轮 */
+  round: 1 | 2;
+  /** 当前是放房屋还是放路 */
+  step: 'settlement' | 'road';
+  /** 完整蛇形顺序的玩家 id 序列，例如 [0,1,2,3,3,2,1,0]（同一玩家出现两次） */
+  order: number[];
+  /** 当前进行到的序列下标：轮到 order[index] 落子（决策时即为你自己） */
+  index: number;
+  /** 你（me）在蛇形序列里出现的两个下标，用来判断下一次还能不能轮到你 */
+  myIndices: number[];
+  /** 本手之前已经落子的玩家 id（按序）；他们选的点见各自 others[].settlementSummaries / myBuildings */
+  pickedBefore: number[];
+  /** 本手之后还要落子的对手 id（按序）；这些点你这次封不掉、之后也可能被他们抢走 */
+  comingAfter: number[];
+}
+
 export interface PlayerView {
   phase: Phase;
   turn: number;
@@ -107,6 +125,24 @@ export interface PlayerView {
     give: ResMap;
     receive: ResMap;
   } | null;
+  /** 开局选点的蛇形顺序情报；仅 setup1/setup2 阶段有，其余阶段为 null */
+  setup: SetupDraftView | null;
+}
+
+/** 构造 setup 蛇形顺序情报：当前位次、前面已选、后面待选 */
+function buildSetupView(s: GameState, me: number): SetupDraftView | null {
+  if (s.phase !== 'setup1' && s.phase !== 'setup2') return null;
+  const order = s.setupOrder;
+  const index = s.setupIndex;
+  return {
+    round: s.phase === 'setup1' ? 1 : 2,
+    step: s.setupStep,
+    order: [...order],
+    index,
+    myIndices: order.flatMap((p, i) => (p === me ? [i] : [])),
+    pickedBefore: order.slice(0, index),
+    comingAfter: order.slice(index + 1),
+  };
 }
 
 export function buildPlayerView(b: Board, s: GameState, me: number): PlayerView {
@@ -213,5 +249,6 @@ export function buildPlayerView(b: Board, s: GameState, me: number): PlayerView 
             receive: { ...s.pendingTrade.receive },
           }
         : null,
+    setup: buildSetupView(s, me),
   };
 }

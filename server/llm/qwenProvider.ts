@@ -177,7 +177,7 @@ export function createQwenProvider(opts: QwenProviderOptions): AiDecisionProvide
     async decide(input: LlmDecisionInput): Promise<LlmDecisionOutput> {
       const userPrompt = buildLlmUserMessage(input, useHint);
       const raw = await callQwen(opts.apiKey, baseUrl, model, LLM_SYSTEM_PROMPT, userPrompt);
-      return parseDecision(raw);
+      return { ...parseDecision(raw), raw };
     },
   };
 }
