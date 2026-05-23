@@ -194,9 +194,24 @@ interface Session {
 const sessions = new Map<string, Session>();
 const snapshotTimers = new Map<string, NodeJS.Timeout>();
 
+function ensureGameStartedAt(game: FullGame): FullGame {
+  if (
+    game.startedAt === null ||
+    (typeof game.startedAt === 'number' && Number.isFinite(game.startedAt))
+  ) {
+    return game;
+  }
+  return { ...game, startedAt: Date.now() };
+}
+
+function withStartedAt(game: FullGame, startedAt = Date.now()): FullGame {
+  return game.startedAt == null ? { ...game, startedAt } : game;
+}
+
 function restoreSession(snap: SessionSnapshot): Session {
   const aiProvider = normalizeProviderName(snap.flags.aiProvider ?? AI_PROVIDER);
-  const agents = createAgentRuntimes(snap.game.state, aiProvider);
+  const game = ensureGameStartedAt(snap.game);
+  const agents = createAgentRuntimes(game.state, aiProvider);
   for (const [idText, saved] of Object.entries(snap.agents ?? {})) {
     const id = Number(idText);
     const agent = agents[id];
@@ -211,7 +226,7 @@ function restoreSession(snap: SessionSnapshot): Session {
     agent.stance = saved.stance;
   }
   return {
-    game: snap.game,
+    game,
     version: snap.version,
     stall: { sig: '', count: 0 },
     aiTimer: null,
@@ -221,7 +236,7 @@ function restoreSession(snap: SessionSnapshot): Session {
     aiProvider,
     agents,
     tradeLedger: createAiTradeLedger(),
-    relationships: snap.relationships ?? createRelationshipLedger(snap.game.state),
+    relationships: snap.relationships ?? createRelationshipLedger(game.state),
     socialChatEnabled: Boolean(snap.flags.socialChatEnabled),
     socialBudget: createSocialBudget(),
     socialBusy: false,
@@ -423,7 +438,7 @@ function applyAction(io: Server, roomId: string, action: Action) {
   const session = getSession(roomId);
   const prev = session.game.state;
   const next = reduce(session.game.board, prev, action);
-  session.game = { board: session.game.board, state: next };
+  session.game = withStartedAt({ ...session.game, state: next });
   session.version++;
   // 关系账本：捕捉强盗/最长路/最大军队/逼近胜利等敌意信号（不推断成交）
   const relEvents = applyTransition(session.relationships, session.game.board, prev, next);
@@ -958,7 +973,7 @@ function scheduleAI(
       // events 已在谈判过程中逐条 emit，此处只需处理成交后的状态更新
       if (negotiation.nextState) {
         const prevState = game.state;
-        session.game = { board: game.board, state: negotiation.nextState };
+        session.game = withStartedAt({ ...game, state: negotiation.nextState });
         session.version++;
         // 关系账本：先记成交（合意建立互信），再记跃迁里的其他敌意信号
         const t = negotiation.acceptedTrade;
@@ -1044,7 +1059,7 @@ function scheduleAI(
     const commitStartedAt = Date.now();
     const prevPhase = game.state.phase;
     const prevState = game.state;
-    session.game = { board: game.board, state: outcome.nextState };
+    session.game = withStartedAt({ ...game, state: outcome.nextState });
     session.version++;
     // 关系账本：AI 单步可能移动强盗 / 拿下最长路最大军队 / 跨过逼近胜利线
     const stepRelEvents = applyTransition(session.relationships, game.board, prevState, outcome.nextState);
@@ -1103,10 +1118,11 @@ function recent<T>(items: T[], limit: number): T[] {
 }
 
 function sessionSummary(roomId: string, session: Session) {
-  const { state } = session.game;
+  const { state, startedAt } = session.game;
   return {
     roomId,
     gameId: state.gameId,
+    startedAt,
     turn: state.turn,
     phase: state.phase,
     current: state.current,

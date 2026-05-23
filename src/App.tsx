@@ -319,7 +319,6 @@ export function App() {
   const aiStepAckedRef = useRef(false);
   const aiStepSawWorkRef = useRef(false);
   const aiAutoActiveRef = useRef(false);
-  const gameClockStartRef = useRef<number | null>(null);
 
   // 防抖：拖拽时高频更新，停手 200ms 后才落盘
   useEffect(() => {
@@ -582,19 +581,13 @@ export function App() {
   useEffect(() => {
     const gid = game?.state.gameId ?? null;
     if (gid == null) return;
-    const restartClock = () => {
-      gameClockStartRef.current = Date.now();
-      setGameElapsedMs(0);
-    };
     if (prevGameIdRef.current == null) {
       // 首次拿到状态：记基线、不清空（保留服务端连接时补拉的历史 buffer）
       prevGameIdRef.current = gid;
-      restartClock();
       return;
     }
     if (prevGameIdRef.current !== gid) {
       prevGameIdRef.current = gid;
-      restartClock();
       setThoughtLog([]);
       setTradeLog([]);
       setSocialLog([]);
@@ -611,15 +604,18 @@ export function App() {
 
   useEffect(() => {
     if (!game?.state.gameId) return;
-    if (gameClockStartRef.current == null) gameClockStartRef.current = Date.now();
+    const startedAt = game.startedAt;
+    if (startedAt == null) {
+      setGameElapsedMs(0);
+      return;
+    }
     const tick = () => {
-      if (gameClockStartRef.current == null) return;
-      setGameElapsedMs(Date.now() - gameClockStartRef.current);
+      setGameElapsedMs(Math.max(0, Date.now() - startedAt));
     };
     tick();
     const id = window.setInterval(tick, 1000);
     return () => window.clearInterval(id);
-  }, [game?.state.gameId]);
+  }, [game?.state.gameId, game?.startedAt]);
 
   // AI 动作高亮只短暂停留，避免遮挡后续人工操作。
   useEffect(() => {

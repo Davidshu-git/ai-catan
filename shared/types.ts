@@ -150,6 +150,8 @@ export interface GameState {
 }
 
 export interface FullGame {
+  /** 本局服务端权威开始时间（Unix ms）；首个有效推进动作提交时写入，刷新不重置 */
+  startedAt: number | null;
   board: Board;
   state: GameState;
 }
