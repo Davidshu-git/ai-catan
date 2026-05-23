@@ -4,6 +4,7 @@
 
 import type { Board, GameState, Resource, ResMap } from './types';
 import { COSTS, RESOURCE_LABEL, RESOURCES } from './types';
+import { playerDisplayName } from './state';
 import {
   canAfford,
   canBuildCity,
@@ -62,11 +63,16 @@ function resStr(m: Partial<ResMap>): string {
   return parts.length ? parts.join(' ') : '无';
 }
 
+/** 玩家显示名（回退到颜色字样，避免 AI 空名） */
+function pn(players: GameState['players'], id: number): string {
+  return playerDisplayName(players, id);
+}
+
 function checkVictory(s: GameState, p: number) {
   if (totalVP(s, p) >= 10) {
     s.winner = p;
     s.phase = 'gameOver';
-    log(s, `🏆 ${s.players[p].name} 达到 10 分，获得胜利！`, false, p);
+    log(s, `🏆 ${pn(s.players, p)} 达到 10 分，获得胜利！`, false, p);
   }
 }
 
@@ -100,7 +106,7 @@ function advanceSetup(b: Board, s: GameState) {
     s.turn = 1;
     s.lastSettlement = null;
     updateLongestRoad(b, s);
-    log(s, `——— 第 1 回合 · ${s.players[s.current].name} ———`, true, s.current);
+    log(s, `——— 第 1 回合 · ${pn(s.players, s.current)} ———`, true, s.current);
     return;
   }
   s.current = s.setupOrder[s.setupIndex];
@@ -119,7 +125,7 @@ function endTurn(b: Board, s: GameState) {
   s.current = (s.current + 1) % s.players.length;
   s.turn++;
   s.phase = 'roll';
-  log(s, `——— 第 ${s.turn} 回合 · ${s.players[s.current].name} ———`, true, s.current);
+  log(s, `——— 第 ${s.turn} 回合 · ${pn(s.players, s.current)} ———`, true, s.current);
   updateLongestRoad(b, s);
 }
 
@@ -132,7 +138,7 @@ function doTrade(s: GameState, from: number, to: number, give: ResMap, receive: 
   }
   log(
     s,
-    `${s.players[from].name} 与 ${s.players[to].name} 交易：给出 ${resStr(give)}，换得 ${resStr(receive)}`,
+    `${pn(s.players, from)} 与 ${pn(s.players, to)} 交易：给出 ${resStr(give)}，换得 ${resStr(receive)}`,
     false, from,
   );
 }
@@ -160,9 +166,9 @@ export function reduce(b: Board, prev: GameState, a: Action): GameState {
           s.bank[r]--;
           got[r] = (got[r] ?? 0) + 1;
         }
-        log(s, `${me.name} 放置第二个房屋，获得 ${resStr(got)}`, false, me.id);
+        log(s, `${pn(s.players, me.id)} 放置第二个房屋，获得 ${resStr(got)}`, false, me.id);
       } else {
-        log(s, `${me.name} 放置初始房屋`, false, me.id);
+        log(s, `${pn(s.players, me.id)} 放置初始房屋`, false, me.id);
       }
       s.setupStep = 'road';
       break;
@@ -172,7 +178,7 @@ export function reduce(b: Board, prev: GameState, a: Action): GameState {
       if (s.setupStep !== 'road') break;
       if (!canPlaceRoadSetup(b, s, a.e)) break;
       s.roads[a.e] = { owner: s.current };
-      log(s, `${me.name} 放置初始道路`, false, me.id);
+      log(s, `${pn(s.players, me.id)} 放置初始道路`, false, me.id);
       s.lastSettlement = null;
       advanceSetup(b, s);
       break;
@@ -185,7 +191,7 @@ export function reduce(b: Board, prev: GameState, a: Action): GameState {
       const d2 = 1 + Math.floor(Math.random() * 6);
       s.dice = [d1, d2];
       const sum = d1 + d2;
-      log(s, `${me.name} 掷出 ${d1} + ${d2} = ${sum}`, false, me.id);
+      log(s, `${pn(s.players, me.id)} 掷出 ${d1} + ${d2} = ${sum}`, false, me.id);
       if (sum === 7) {
         s.robberReturn = 'main';
         s.discardLeft = {};
@@ -198,14 +204,14 @@ export function reduce(b: Board, prev: GameState, a: Action): GameState {
           log(s, `掷出 7！手牌超过 7 张的玩家需弃掉一半`);
         } else {
           s.phase = 'moveRobber';
-          log(s, `掷出 7！${me.name} 移动强盗`, false, me.id);
+          log(s, `掷出 7！${pn(s.players, me.id)} 移动强盗`, false, me.id);
         }
       } else {
         const gains = produceResources(b, s, sum);
         for (const p of s.players) {
           const g = gains[p.id];
           if (RESOURCES.some((r) => g[r] > 0)) {
-            log(s, `${p.name} 获得 ${resStr(g)}`, false, p.id);
+            log(s, `${pn(s.players, p.id)} 获得 ${resStr(g)}`, false, p.id);
           }
         }
         s.phase = 'main';
@@ -228,10 +234,10 @@ export function reduce(b: Board, prev: GameState, a: Action): GameState {
         s.bank[r] += c;
       }
       delete s.discardLeft[a.player];
-      log(s, `${pl.name} 弃掉 ${resStr(a.cards)}`, false, pl.id);
+      log(s, `${pn(s.players, pl.id)} 弃掉 ${resStr(a.cards)}`, false, pl.id);
       if (Object.keys(s.discardLeft).length === 0) {
         s.phase = 'moveRobber';
-        log(s, `${me.name} 移动强盗`, false, me.id);
+        log(s, `${pn(s.players, me.id)} 移动强盗`, false, me.id);
       }
       break;
     }
@@ -241,7 +247,7 @@ export function reduce(b: Board, prev: GameState, a: Action): GameState {
       if (s.phase !== 'moveRobber') break;
       if (a.hex === s.robber) break;
       s.robber = a.hex;
-      log(s, `${me.name} 把强盗移到 ${b.hexes[a.hex].number ?? '沙漠'} 号地块`, false, me.id);
+      log(s, `${pn(s.players, me.id)} 把强盗移到 ${b.hexes[a.hex].number ?? '沙漠'} 号地块`, false, me.id);
       finishRobber(b, s);
       break;
     }
@@ -255,7 +261,7 @@ export function reduce(b: Board, prev: GameState, a: Action): GameState {
         const r = pool[Math.floor(Math.random() * pool.length)];
         victim.resources[r]--;
         me.resources[r]++;
-        log(s, `${me.name} 从 ${victim.name} 偷走 1 张牌`, false, me.id);
+        log(s, `${pn(s.players, me.id)} 从 ${pn(s.players, victim.id)} 偷走 1 张牌`, false, me.id);
       }
       s.phase = s.robberReturn;
       break;
@@ -270,7 +276,7 @@ export function reduce(b: Board, prev: GameState, a: Action): GameState {
       if (free) s.freeRoads--;
       else spend(s, s.current, COSTS.road);
       s.roads[a.e] = { owner: s.current };
-      log(s, `${me.name} 修建了一条道路${free ? '（免费）' : ''}`, false, me.id);
+      log(s, `${pn(s.players, me.id)} 修建了一条道路${free ? '（免费）' : ''}`, false, me.id);
       updateLongestRoad(b, s);
       checkVictory(s, s.current);
       break;
@@ -281,7 +287,7 @@ export function reduce(b: Board, prev: GameState, a: Action): GameState {
       if (!canAfford(me, COSTS.settlement)) break;
       spend(s, s.current, COSTS.settlement);
       s.buildings[a.v] = { type: 'settlement', owner: s.current };
-      log(s, `${me.name} 建造了一座房屋`, false, me.id);
+      log(s, `${pn(s.players, me.id)} 建造了一座房屋`, false, me.id);
       updateLongestRoad(b, s); // 可能截断对手的路
       checkVictory(s, s.current);
       break;
@@ -292,7 +298,7 @@ export function reduce(b: Board, prev: GameState, a: Action): GameState {
       if (!canAfford(me, COSTS.city)) break;
       spend(s, s.current, COSTS.city);
       s.buildings[a.v] = { type: 'city', owner: s.current };
-      log(s, `${me.name} 把房屋升级为城市`, false, me.id);
+      log(s, `${pn(s.players, me.id)} 把房屋升级为城市`, false, me.id);
       checkVictory(s, s.current);
       break;
     }
@@ -304,11 +310,11 @@ export function reduce(b: Board, prev: GameState, a: Action): GameState {
       const card = s.devDeck.pop()!;
       if (card === '胜利点') {
         me.vpCards++;
-        log(s, `${me.name} 购买了一张发展卡`, false, me.id);
+        log(s, `${pn(s.players, me.id)} 购买了一张发展卡`, false, me.id);
         checkVictory(s, s.current);
       } else {
         me.newDevCards.push(card);
-        log(s, `${me.name} 购买了一张发展卡`, false, me.id);
+        log(s, `${pn(s.players, me.id)} 购买了一张发展卡`, false, me.id);
       }
       break;
     }
@@ -322,7 +328,7 @@ export function reduce(b: Board, prev: GameState, a: Action): GameState {
       me.devCards.splice(i, 1);
       me.knightsPlayed++;
       s.devPlayed = true;
-      log(s, `${me.name} 打出骑士卡`, false, me.id);
+      log(s, `${pn(s.players, me.id)} 打出骑士卡`, false, me.id);
       updateLargestArmy(s);
       checkVictory(s, s.current);
       if (s.winner !== null) break;
@@ -337,7 +343,7 @@ export function reduce(b: Board, prev: GameState, a: Action): GameState {
       me.devCards.splice(i, 1);
       s.devPlayed = true;
       s.freeRoads += 2;
-      log(s, `${me.name} 打出修路卡，可免费修建 2 条路`, false, me.id);
+      log(s, `${pn(s.players, me.id)} 打出修路卡，可免费修建 2 条路`, false, me.id);
       break;
     }
     case 'PLAY_YEAR_OF_PLENTY': {
@@ -352,7 +358,7 @@ export function reduce(b: Board, prev: GameState, a: Action): GameState {
           me.resources[r]++;
         }
       }
-      log(s, `${me.name} 打出丰收卡，获得 ${RESOURCE_LABEL[a.r1]}、${RESOURCE_LABEL[a.r2]}`, false, me.id);
+      log(s, `${pn(s.players, me.id)} 打出丰收卡，获得 ${RESOURCE_LABEL[a.r1]}、${RESOURCE_LABEL[a.r2]}`, false, me.id);
       break;
     }
     case 'PLAY_MONOPOLY': {
@@ -368,7 +374,7 @@ export function reduce(b: Board, prev: GameState, a: Action): GameState {
         p.resources[a.r] = 0;
       }
       me.resources[a.r] += got;
-      log(s, `${me.name} 打出垄断卡，垄断 ${RESOURCE_LABEL[a.r]}，共收取 ${got} 张`, false, me.id);
+      log(s, `${pn(s.players, me.id)} 打出垄断卡，垄断 ${RESOURCE_LABEL[a.r]}，共收取 ${got} 张`, false, me.id);
       break;
     }
 
@@ -384,7 +390,7 @@ export function reduce(b: Board, prev: GameState, a: Action): GameState {
       s.bank[a.receive] -= 1;
       log(
         s,
-        `${me.name} 与银行 ${ratio}:1 兑换：${RESOURCE_LABEL[a.give]} → ${RESOURCE_LABEL[a.receive]}`,
+        `${pn(s.players, me.id)} 与银行 ${ratio}:1 兑换：${RESOURCE_LABEL[a.give]} → ${RESOURCE_LABEL[a.receive]}`,
         false, me.id,
       );
       break;
@@ -395,7 +401,7 @@ export function reduce(b: Board, prev: GameState, a: Action): GameState {
       s.pendingTrade = { from: s.current, to: a.to, give: a.give, receive: a.receive };
       log(
         s,
-        `${s.players[s.current].name} 向你提议交易：给你 ${resStr(a.give)}，想换 ${resStr(a.receive)}`,
+        `${pn(s.players, s.current)} 向你提议交易：给你 ${resStr(a.give)}，想换 ${resStr(a.receive)}`,
         false, s.current,
       );
       break;
@@ -416,7 +422,7 @@ export function reduce(b: Board, prev: GameState, a: Action): GameState {
         const okTo = RESOURCES.every((r) => s.players[t.to].resources[r] >= t.receive[r]);
         if (okFrom && okTo) doTrade(s, t.from, t.to, t.give, t.receive);
       } else {
-        log(s, `你拒绝了 ${s.players[t.from].name} 的交易提议`, false, t.from);
+        log(s, `你拒绝了 ${pn(s.players, t.from)} 的交易提议`, false, t.from);
       }
       s.pendingTrade = null;
       break;

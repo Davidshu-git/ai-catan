@@ -1810,21 +1810,21 @@ function InspectorPanel({
         </button>
         <button
           type="button"
-          className={activeTab === 'trades' ? 'active' : ''}
-          role="tab"
-          aria-selected={activeTab === 'trades'}
-          onClick={() => onTabChange('trades')}
-        >
-          交易
-        </button>
-        <button
-          type="button"
           className={activeTab === 'room' ? 'active' : ''}
           role="tab"
           aria-selected={activeTab === 'room'}
           onClick={() => onTabChange('room')}
         >
           社交
+        </button>
+        <button
+          type="button"
+          className={activeTab === 'trades' ? 'active' : ''}
+          role="tab"
+          aria-selected={activeTab === 'trades'}
+          onClick={() => onTabChange('trades')}
+        >
+          交易
         </button>
         <button
           type="button"
@@ -1840,9 +1840,6 @@ function InspectorPanel({
         {activeTab === 'thoughts' && (
           <ThoughtLogContent items={thoughtItems} players={players} />
         )}
-        {activeTab === 'trades' && (
-          <TradeLogContent items={tradeItems} players={players} />
-        )}
         {activeTab === 'room' && (
           <RoomContent
             items={socialItems}
@@ -1851,6 +1848,9 @@ function InspectorPanel({
             socialChatEnabled={socialChatEnabled}
             onToggleSocialChat={onToggleSocialChat}
           />
+        )}
+        {activeTab === 'trades' && (
+          <TradeLogContent items={tradeItems} players={players} />
         )}
         {activeTab === 'log' && (
           <LogContent state={state} players={players} />
@@ -2284,23 +2284,69 @@ function LogContent({
   state: FullGame['state'];
   players: FullGame['state']['players'];
 }) {
+  const groups = useMemo(() => {
+    const result: {
+      turnText: string;
+      turnPlayer: number;
+      entries: typeof state.log;
+    }[] = [];
+    let cur: (typeof result)[number] | null = null;
+    for (const l of state.log) {
+      if (l.turnMark) {
+        if (cur && cur.entries.length > 0) result.push(cur);
+        cur = { turnText: l.text, turnPlayer: l.player!, entries: [] };
+      } else if (cur) {
+        cur.entries.push(l);
+      } else {
+        cur = { turnText: '', turnPlayer: -1, entries: [l] };
+      }
+    }
+    if (cur && cur.entries.length > 0) result.push(cur);
+    return result.slice(-30).reverse();
+  }, [state.log]);
+
   return (
     <div className="log event-feed">
-      {state.log
-        .slice(-60)
-        .reverse()
-        .map((l, i) => {
-          const color = l.player != null ? players[l.player]?.color : undefined;
-          return (
-            <div
-              key={i}
-              className={l.turnMark ? 'log-turn-mark' : 'log-entry'}
-              style={color ? { borderLeftColor: color } : undefined}
-            >
-              {l.text}
+      {groups.map((group, gi) => {
+        const sessionColor =
+          group.turnPlayer >= 0 ? players[group.turnPlayer]?.color : undefined;
+        return (
+          <div
+            key={gi}
+            className="log-session"
+            style={sessionColor ? { borderLeftColor: sessionColor } : undefined}
+          >
+            {group.turnText && (
+              <div className="log-session-head">
+                <span
+                  className="player-dot"
+                  style={
+                    group.turnPlayer >= 0
+                      ? { background: players[group.turnPlayer]?.color }
+                      : undefined
+                  }
+                />
+                <span className="log-session-title">{group.turnText}</span>
+              </div>
+            )}
+            <div className="log-entries">
+              {group.entries.map((l, ei) => (
+                <div
+                  key={ei}
+                  className="log-entry"
+                  style={
+                    l.player != null
+                      ? { borderLeftColor: players[l.player]?.color }
+                      : undefined
+                  }
+                >
+                  {l.text}
+                </div>
+              ))}
             </div>
-          );
-        })}
+          </div>
+        );
+      })}
     </div>
   );
 }
