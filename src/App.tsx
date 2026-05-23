@@ -87,14 +87,16 @@ const DIE_DOTS: Record<number, [number, number][]> = {
 function Die({ v }: { v: number }) {
   return (
     <svg className="die rolling" viewBox="0 0 46 46" width={46} height={46}>
+      <image href="/assets/hud-dice-parchment.png" x="0" y="0" width="46" height="46" preserveAspectRatio="none" />
       {(DIE_DOTS[v] ?? []).map(([gx, gy], i) => (
-        <circle key={i} cx={9 + gx * 14} cy={9 + gy * 14} r={4.4} fill="#241d1a" />
+        <circle key={i} className="die-dot" cx={10 + gx * 13} cy={10 + gy * 13} r={4.1} />
       ))}
     </svg>
   );
 }
 
 function DiceHud({ dice, turn }: { dice: [number, number] | null; turn: number }) {
+  const sum = dice ? dice[0] + dice[1] : null;
   return (
     <div className="dice-hud" aria-label={dice ? `骰子 ${dice[0]} 和 ${dice[1]}` : '尚未掷骰'}>
       <div className="dice">
@@ -102,16 +104,37 @@ function DiceHud({ dice, turn }: { dice: [number, number] | null; turn: number }
           <>
             <Die key={`d1-${turn}-${dice[0]}-${dice[1]}`} v={dice[0]} />
             <Die key={`d2-${turn}-${dice[0]}-${dice[1]}`} v={dice[1]} />
-            <span className="dice-sum">= {dice[0] + dice[1]}</span>
           </>
         ) : (
           <>
             <div className="die die-empty">?</div>
             <div className="die die-empty">?</div>
-            <span className="dice-sum">= --</span>
           </>
         )}
       </div>
+      <span className={`dice-total-label${dice ? '' : ' dice-total-label-empty'}`} title="本次点数">
+        {dice ? `点数 ${sum}` : '未掷'}
+      </span>
+    </div>
+  );
+}
+
+function formatGameClock(ms: number): string {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  if (h > 0) {
+    return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+  }
+  return `${m}:${String(s).padStart(2, '0')}`;
+}
+
+function GameClock({ elapsedMs }: { elapsedMs: number }) {
+  return (
+    <div className="game-clock" aria-label={`整局计时 ${formatGameClock(elapsedMs)}`}>
+      <span className="game-clock-label">整局</span>
+      <span className="game-clock-time">{formatGameClock(elapsedMs)}</span>
     </div>
   );
 }
@@ -289,12 +312,14 @@ export function App() {
   const [aiControl, setAiControl] = useState<AiControlState>(DEFAULT_AI_CONTROL);
   const [aiStepTimer, setAiStepTimer] = useState<AiStepTimer>(EMPTY_AI_STEP_TIMER);
   const [aiAutoTimer, setAiAutoTimer] = useState<AiStepTimer>(EMPTY_AI_STEP_TIMER);
+  const [gameElapsedMs, setGameElapsedMs] = useState(0);
   const [sidebarWidth, setSidebarWidth] = useState<number>(readStoredSidebarWidth);
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>('thoughts');
   const draggingRef = useRef(false);
   const aiStepAckedRef = useRef(false);
   const aiStepSawWorkRef = useRef(false);
   const aiAutoActiveRef = useRef(false);
+  const gameClockStartRef = useRef<number | null>(null);
 
   // 防抖：拖拽时高频更新，停手 200ms 后才落盘
   useEffect(() => {
@@ -557,13 +582,19 @@ export function App() {
   useEffect(() => {
     const gid = game?.state.gameId ?? null;
     if (gid == null) return;
+    const restartClock = () => {
+      gameClockStartRef.current = Date.now();
+      setGameElapsedMs(0);
+    };
     if (prevGameIdRef.current == null) {
       // 首次拿到状态：记基线、不清空（保留服务端连接时补拉的历史 buffer）
       prevGameIdRef.current = gid;
+      restartClock();
       return;
     }
     if (prevGameIdRef.current !== gid) {
       prevGameIdRef.current = gid;
+      restartClock();
       setThoughtLog([]);
       setTradeLog([]);
       setSocialLog([]);
@@ -576,6 +607,18 @@ export function App() {
       setAiStepTimer(EMPTY_AI_STEP_TIMER);
       setAiAutoTimer(EMPTY_AI_STEP_TIMER);
     }
+  }, [game?.state.gameId]);
+
+  useEffect(() => {
+    if (!game?.state.gameId) return;
+    if (gameClockStartRef.current == null) gameClockStartRef.current = Date.now();
+    const tick = () => {
+      if (gameClockStartRef.current == null) return;
+      setGameElapsedMs(Date.now() - gameClockStartRef.current);
+    };
+    tick();
+    const id = window.setInterval(tick, 1000);
+    return () => window.clearInterval(id);
   }, [game?.state.gameId]);
 
   // AI 动作高亮只短暂停留，避免遮挡后续人工操作。
@@ -662,9 +705,10 @@ export function App() {
             highlightPlayer={aiFocus?.player ?? null}
           />
         </div>
+        <GameClock elapsedMs={gameElapsedMs} />
         <DiceHud dice={state.dice} turn={state.turn} />
         <button className="new-game-fab" onClick={newGame} title="重开一局">
-          ↺
+          <span>重开</span>
         </button>
       </div>
 
