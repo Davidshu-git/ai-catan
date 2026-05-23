@@ -177,7 +177,7 @@ type AiStepTimer = {
   lastMs: number | null;
   lastOk: boolean | null;
 };
-type SidebarEventTab = 'human' | 'thoughts' | 'trades' | 'room' | 'log';
+type InspectorTab = 'thoughts' | 'trades' | 'room' | 'log';
 
 const THOUGHT_LOG_MAX = 80;
 const TRADE_LOG_MAX = 120;
@@ -273,26 +273,6 @@ function humanActionSeat(state: FullGame['state'] | undefined): number | null {
   return current && !current.isAI ? current.id : null;
 }
 
-function humanAttentionKey(
-  state: FullGame['state'] | undefined,
-  humanTradeState: HumanTradeStateEvent,
-): string {
-  if (!state) return '';
-  const seat = humanActionSeat(state);
-  if (seat != null) {
-    const discardLeft = state.discardLeft[seat] ?? 0;
-    const pending = state.pendingTrade?.to === seat ? state.pendingTrade.from : '';
-    return `${state.gameId}:${state.turn}:${state.phase}:${state.current}:${seat}:${state.setupStep}:${discardLeft}:${pending}`;
-  }
-  const deals = humanTradeState.standingDeals ?? [];
-  if (humanTradeState.active && deals.length > 0) {
-    return `${humanTradeState.sessionId}:${deals
-      .map((d) => `${d.player}-${d.source}-${resSummary(d.give)}-${resSummary(d.receive)}`)
-      .join('|')}`;
-  }
-  return '';
-}
-
 export function App() {
   // 初始 null：等待服务端 sync_state；AI 驱动循环全部在服务端
   const [game, setGame] = useState<FullGame | null>(null);
@@ -310,7 +290,7 @@ export function App() {
   const [aiStepTimer, setAiStepTimer] = useState<AiStepTimer>(EMPTY_AI_STEP_TIMER);
   const [aiAutoTimer, setAiAutoTimer] = useState<AiStepTimer>(EMPTY_AI_STEP_TIMER);
   const [sidebarWidth, setSidebarWidth] = useState<number>(readStoredSidebarWidth);
-  const [sidebarEventTab, setSidebarEventTab] = useState<SidebarEventTab>('thoughts');
+  const [inspectorTab, setInspectorTab] = useState<InspectorTab>('thoughts');
   const draggingRef = useRef(false);
   const aiStepAckedRef = useRef(false);
   const aiStepSawWorkRef = useRef(false);
@@ -608,13 +588,6 @@ export function App() {
   // ⚠️ 所有 hook 必须在 early return 之前调用（Rules of Hooks）
   const state = game?.state;
   const activeHumanSeat = useMemo(() => humanActionSeat(state), [state]);
-  const humanTabAttentionKey = useMemo(
-    () => humanAttentionKey(state, humanTradeState),
-    [state, humanTradeState],
-  );
-  useEffect(() => {
-    if (humanTabAttentionKey) setSidebarEventTab('human');
-  }, [humanTabAttentionKey]);
   const isHumanTurn = state ? state.players[state.current]?.isAI === false : false;
   const isSetup = state?.phase === 'setup1' || state?.phase === 'setup2';
   const boardMode: BoardMode = useMemo(() => {
@@ -707,30 +680,22 @@ export function App() {
       </div>
 
       <aside className="sidebar">
-        <div className="sidebar-scroll">
-          <Players
-            game={game}
-            processingMs={
-              aiStepTimer.running
-                ? aiStepTimer.elapsedMs
-                : aiAutoTimer.running
-                  ? aiAutoTimer.elapsedMs
-                  : null
-            }
-            agentProviders={aiControl.agentProviders}
-            agentPersonalities={aiControl.agentPersonalities}
-            providerOptions={aiControl.providerOptions}
-            connected={connected}
-            onSetProvider={setAiProvider}
-          />
-        </div>
-        <SidebarEventPanel
-          activeTab={sidebarEventTab}
-          onTabChange={setSidebarEventTab}
-          thoughtItems={thoughtLog}
-          tradeItems={tradeLog}
-          socialItems={socialLog}
-          relationships={relationships}
+        <Players
+          game={game}
+          processingMs={
+            aiStepTimer.running
+              ? aiStepTimer.elapsedMs
+              : aiAutoTimer.running
+                ? aiAutoTimer.elapsedMs
+                : null
+          }
+          agentProviders={aiControl.agentProviders}
+          agentPersonalities={aiControl.agentPersonalities}
+          providerOptions={aiControl.providerOptions}
+          connected={connected}
+          onSetProvider={setAiProvider}
+        />
+        <HumanActionPanel
           game={game}
           mode={mode}
           setMode={setMode}
@@ -739,19 +704,25 @@ export function App() {
           humanSeat={activeHumanSeat}
           humanTradeState={humanTradeState}
           connected={connected}
-          hasHumanAttention={Boolean(humanTabAttentionKey)}
         />
-        <div className="sidebar-fixed-controls">
-          <AiControls
-            control={aiControl}
-            connected={connected}
-            stepTimer={aiStepTimer}
-            onAutoplay={setAiAutoplay}
-            onStep={stepAi}
-            onToggleHint={setAiHint}
-            onToggleSocialChat={setSocialChat}
-          />
-        </div>
+        <InspectorPanel
+          activeTab={inspectorTab}
+          onTabChange={setInspectorTab}
+          thoughtItems={thoughtLog}
+          tradeItems={tradeLog}
+          socialItems={socialLog}
+          relationships={relationships}
+          game={game}
+        />
+        <AiControls
+          control={aiControl}
+          connected={connected}
+          stepTimer={aiStepTimer}
+          onAutoplay={setAiAutoplay}
+          onStep={stepAi}
+          onToggleHint={setAiHint}
+          onToggleSocialChat={setSocialChat}
+        />
       </aside>
 
       {toast && <div className="toast">{toast}</div>}
@@ -957,6 +928,47 @@ function Players({
           );
         })}
       </div>
+    </div>
+  );
+}
+
+// ---------- 真人操作面板 ----------
+
+function HumanActionPanel({
+  game,
+  mode,
+  setMode,
+  dispatch,
+  flash,
+  humanSeat,
+  humanTradeState,
+  connected,
+}: {
+  game: FullGame;
+  mode: BoardMode;
+  setMode: (m: BoardMode) => void;
+  dispatch: (a: Action) => void;
+  flash: (m: string) => void;
+  humanSeat: number | null;
+  humanTradeState: HumanTradeStateEvent;
+  connected: boolean;
+}) {
+  return (
+    <div className="human-action-panel">
+      {humanSeat == null ? (
+        <div className="hint">当前为 AI 观察局。轮到 AI 时可用底部控制区推进。</div>
+      ) : (
+        <Phase
+          game={game}
+          mode={mode}
+          setMode={setMode}
+          dispatch={dispatch}
+          flash={flash}
+          seat={humanSeat}
+          humanTradeState={humanTradeState}
+          connected={connected}
+        />
+      )}
     </div>
   );
 }
@@ -1726,7 +1738,7 @@ function TradeMessageDebug({
   );
 }
 
-function SidebarEventPanel({
+function InspectorPanel({
   activeTab,
   onTabChange,
   thoughtItems,
@@ -1734,46 +1746,20 @@ function SidebarEventPanel({
   socialItems,
   relationships,
   game,
-  mode,
-  setMode,
-  dispatch,
-  flash,
-  humanSeat,
-  humanTradeState,
-  connected,
-  hasHumanAttention,
 }: {
-  activeTab: SidebarEventTab;
-  onTabChange: (tab: SidebarEventTab) => void;
+  activeTab: InspectorTab;
+  onTabChange: (tab: InspectorTab) => void;
   thoughtItems: ThoughtLogItem[];
   tradeItems: TradeLogItem[];
   socialItems: SocialChatEvent[];
   relationships: RelationshipSnapshotEvent | null;
   game: FullGame;
-  mode: BoardMode;
-  setMode: (mode: BoardMode) => void;
-  dispatch: (a: Action) => void;
-  flash: (m: string) => void;
-  humanSeat: number | null;
-  humanTradeState: HumanTradeStateEvent;
-  connected: boolean;
-  hasHumanAttention: boolean;
 }) {
   const { state } = game;
   const players = state.players;
   return (
-    <div className="card card-plain sidebar-event-panel">
-      <div className="sidebar-tabs" role="tablist" aria-label="AI 思考流与对局日志">
-        <button
-          type="button"
-          className={activeTab === 'human' ? 'active' : ''}
-          role="tab"
-          aria-selected={activeTab === 'human'}
-          onClick={() => onTabChange('human')}
-        >
-          我的操作
-          {hasHumanAttention && <span className="tab-dot" />}
-        </button>
+    <div className="inspector-panel">
+      <div className="inspector-tabs" role="tablist" aria-label="观察面板">
         <button
           type="button"
           className={activeTab === 'thoughts' ? 'active' : ''}
@@ -1781,7 +1767,7 @@ function SidebarEventPanel({
           aria-selected={activeTab === 'thoughts'}
           onClick={() => onTabChange('thoughts')}
         >
-          AI 思考流
+          AI 思考
         </button>
         <button
           type="button"
@@ -1790,7 +1776,7 @@ function SidebarEventPanel({
           aria-selected={activeTab === 'trades'}
           onClick={() => onTabChange('trades')}
         >
-          交易谈判
+          交易
         </button>
         <button
           type="button"
@@ -1799,7 +1785,7 @@ function SidebarEventPanel({
           aria-selected={activeTab === 'room'}
           onClick={() => onTabChange('room')}
         >
-          社交房间
+          社交
         </button>
         <button
           type="button"
@@ -1808,41 +1794,15 @@ function SidebarEventPanel({
           aria-selected={activeTab === 'log'}
           onClick={() => onTabChange('log')}
         >
-          对局日志
+          日志
         </button>
       </div>
-      <div className="sidebar-tab-body">
-        {activeTab === 'human' && (
-          <div className="human-actions">
-            <Phase
-              game={game}
-              mode={mode}
-              setMode={setMode}
-              dispatch={dispatch}
-              flash={flash}
-              seat={humanSeat}
-              humanTradeState={humanTradeState}
-              connected={connected}
-            />
-          </div>
-        )}
+      <div className="inspector-body">
         {activeTab === 'thoughts' && (
           <ThoughtLogContent items={thoughtItems} players={players} />
         )}
         {activeTab === 'trades' && (
-          <div className="trade-tab-layout">
-            <TradeLogContent items={tradeItems} players={players} />
-            {humanSeat != null && (
-              <HumanNegotiation
-                game={game}
-                seat={humanSeat}
-                humanTradeState={humanTradeState}
-                connected={connected}
-                flash={flash}
-                dock
-              />
-            )}
-          </div>
+          <TradeLogContent items={tradeItems} players={players} />
         )}
         {activeTab === 'room' && (
           <RoomContent items={socialItems} relationships={relationships} players={players} />
@@ -1878,7 +1838,7 @@ function RoomContent({
   return (
     <div className="room-tab">
       <RelationshipMatrix relationships={relationships} players={players} />
-      <div className="room-social-stream">
+      <div className="room-social-stream event-feed">
         {reversed.length === 0 ? (
           <p className="cost">社交聊天默认关闭。开启「社交聊天」后，AI 会就强盗、最长路、逼近胜利等事件互相喊话。</p>
         ) : (
@@ -1971,7 +1931,7 @@ function ThoughtLogContent({
       {reversed.length === 0 ? (
         <p className="cost">等待 AI 行动…</p>
       ) : (
-        <div className="thought-log">
+        <div className="thought-log event-feed">
           {reversed.map((it, i) => {
             const p = players[it.data.player];
             if (it.kind === 'thought') {
@@ -2173,14 +2133,14 @@ function TradeLogContent({
 
   if (sessions.length === 0) {
     return (
-      <div className="trade-log trade-log-empty">
+      <div className="trade-log event-feed">
         <p className="cost">等待交易谈判…</p>
       </div>
     );
   }
 
   return (
-    <div className="trade-log">
+    <div className="trade-log event-feed">
       {sessions.map((session) => {
         const started = session.started;
         const closed = session.closed;
@@ -2260,7 +2220,7 @@ function TradeLogContent({
 
 function LogContent({ state }: { state: FullGame['state'] }) {
   return (
-    <div className="log">
+    <div className="log event-feed">
       {state.log
         .slice(-60)
         .reverse()

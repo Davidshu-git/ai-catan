@@ -162,34 +162,55 @@ body {
   flex-direction: column;
   overflow: hidden;
   box-shadow: -10px 0 0 rgba(18, 15, 13, 0.18), -18px 0 30px rgba(0, 0, 0, 0.28);
+  padding: 16px 18px 16px;
 }
 
-.sidebar-scroll {
-  flex: 0 1 auto;
-  min-height: 0;
-  overflow-y: auto;
-  padding: 16px 18px 10px;
+/* ---- 玩家区 ---- */
+.sidebar .players-grid {
+  /* Players 直接作为 sidebar 子元素，已有 card-plain 的透明样式 */
+}
+
+/* ---- 真人操作面板 ---- */
+.human-action-panel {
+  flex: 0 0 auto;
+  padding: 14px 0 10px;
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 10px;
+  max-height: 56%;
+  overflow-y: auto;
 }
 
-.sidebar-event-panel {
-  flex: 1 0 320px;
-  margin: 0 18px;
+.human-action-panel .card {
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+  padding: 0 0 10px;
+}
+
+.human-action-panel .card::after {
+  display: none;
+}
+
+/* ---- 观察面板 ---- */
+.inspector-panel {
+  flex: 1 1 auto;
+  min-height: 0;
+  margin-top: 4px;
   display: flex;
   flex-direction: column;
   overflow: hidden;
 }
 
-.sidebar-tabs {
+.inspector-tabs {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
   gap: 6px;
   margin-bottom: 8px;
 }
 
-.sidebar-tabs button {
+.inspector-tabs button {
   font: inherit;
   font-size: 12px;
   font-weight: 900;
@@ -202,82 +223,76 @@ body {
   position: relative;
 }
 
-.sidebar-tabs button.active {
+.inspector-tabs button.active {
   color: var(--cream);
   background: var(--accent);
   border-color: var(--accent-d);
 }
 
-.sidebar-tab-body {
-  flex: 1;
-  min-height: 0;
-  overflow: hidden;
-}
-
-.tab-dot {
-  position: absolute;
-  top: 4px;
-  right: 4px;
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--bad);
-  box-shadow: 0 0 0 2px rgba(246, 237, 215, 0.72);
-}
-
-.sidebar-event-panel .thought-log,
-.sidebar-event-panel .trade-log,
-.sidebar-event-panel .log {
-  height: 100%;
-  max-height: none;
-}
-
-.trade-tab-layout {
-  height: 100%;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  position: relative;
-}
-
-.trade-tab-layout .trade-log {
+.inspector-body {
   flex: 1 1 auto;
-  height: auto;
   min-height: 0;
-  max-height: none;
-  padding-right: 2px;
-  padding-bottom: 8px;
+  overflow: hidden;
 }
 
-.trade-log-empty {
-  justify-content: flex-end;
-}
-
-.human-actions {
+/* 统一事件流滚动 */
+.event-feed {
   height: 100%;
+  min-height: 0;
   overflow-y: auto;
-  padding-right: 2px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
 }
 
-.human-actions .card {
-  background: transparent;
-  border: none;
-  border-radius: 0;
-  box-shadow: none;
-  padding: 0 0 10px;
+.event-item {
+  border-left: 3px solid var(--line);
+  background: rgba(216, 199, 158, 0.48);
+  padding: 6px 9px;
+  border-radius: 0 5px 5px 0;
 }
 
-.human-actions .card::after {
-  display: none;
+.event-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+  margin-bottom: 4px;
 }
 
-.sidebar-fixed-controls {
-  flex: 0 0 auto;
-  padding: 14px 18px 16px;
+.event-title {
+  font-weight: 800;
+  color: var(--ink);
+  font-size: 12.5px;
+}
+
+.event-tag {
+  background: var(--cream);
+  border: 1px solid var(--line-soft);
+  border-radius: 3px;
+  padding: 0px 5px;
+  font-size: 10.5px;
+  font-weight: 700;
+  color: #66513e;
+  letter-spacing: 0.3px;
+}
+
+.event-text {
+  color: var(--ink);
+  font-weight: 600;
+  white-space: pre-wrap;
+}
+
+.event-meta {
+  color: #66513e;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.event-debug {
+  margin-top: 5px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
 
 .card {
@@ -615,7 +630,7 @@ select {
   font-size: 12.5px;
   line-height: 1.55;
   color: var(--ink);
-  max-height: 210px;
+  height: 100%;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
@@ -629,7 +644,7 @@ select {
   display: flex;
   flex-direction: column;
   gap: 7px;
-  max-height: 280px;
+  height: 100%;
   overflow-y: auto;
   font-size: 12.5px;
   line-height: 1.55;
@@ -864,7 +879,7 @@ select {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  max-height: 280px;
+  height: 100%;
   overflow-y: auto;
   font-size: 12.3px;
   line-height: 1.45;
