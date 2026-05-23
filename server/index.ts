@@ -12,10 +12,11 @@
 //   7. 提供 AI 自动 / 暂停 / 单步推进控制事件，便于观察 LLM 决策
 //   8. 支持观察者把席位切成真人，并与 AI 进行多轮交互谈判
 //
-// 不在本轮做：玩家身份认证、多房间匹配、断线续盘、持久化。
+// 不在本轮做：玩家身份认证、多房间匹配。
 // ============================================================
 
 import { createServer } from 'http';
+import type { IncomingMessage, ServerResponse } from 'http';
 import { Server, type Socket } from 'socket.io';
 
 import { createGame } from '../shared/state';
@@ -29,7 +30,6 @@ import type {
   SocialChatEvent,
   TradeChatClosedEvent,
   TradeChatMessageEvent,
-  TradeChatStartedEvent,
   TradeDecisionEvent,
   TradeLimitsEvent,
   TradeOfferEvent,
@@ -90,6 +90,16 @@ import {
   type SocialLineFn,
 } from './social/socialChat';
 import { generateSocialLine } from './llm/socialProvider';
+import {
+  loadSnapshot,
+  persistDebounceMs,
+  persistEnabled,
+  saveSnapshot,
+  type AiEventLogEntry,
+  type TradeEventLogEntry,
+  type SessionSnapshot,
+} from './persist';
+import { appendAiTrace, traceHttpEnabled } from './trace';
 
 const PORT = Number(process.env.PORT ?? 3001);
 const AI_TICK_MS = Number(process.env.AI_TICK_MS ?? 460); // 每步 AI 之间的节奏
@@ -143,16 +153,6 @@ function aiProviderOptions(): AiControlState['providerOptions'] {
   ];
 }
 
-interface AiEventLogEntry {
-  kind: 'thought' | 'error';
-  data: AiThoughtEvent | AiErrorEvent;
-}
-
-interface TradeEventLogEntry {
-  kind: 'started' | 'message' | 'closed';
-  data: TradeChatStartedEvent | TradeChatMessageEvent | TradeChatClosedEvent;
-}
-
 interface Session {
   game: FullGame;
   /** 每次权威状态变更递增；用于丢弃异步 LLM 返回的过期决策 */
@@ -192,32 +192,89 @@ interface Session {
 }
 
 const sessions = new Map<string, Session>();
+const snapshotTimers = new Map<string, NodeJS.Timeout>();
+
+function restoreSession(snap: SessionSnapshot): Session {
+  const aiProvider = normalizeProviderName(snap.flags.aiProvider ?? AI_PROVIDER);
+  const agents = createAgentRuntimes(snap.game.state, aiProvider);
+  for (const [idText, saved] of Object.entries(snap.agents ?? {})) {
+    const id = Number(idText);
+    const agent = agents[id];
+    if (!agent) continue;
+    agent.providerName = normalizeProviderName(saved.providerName ?? agent.providerName);
+    agent.memory = Array.isArray(saved.memory) ? [...saved.memory] : [];
+    agent.decisionCount =
+      typeof saved.decisionCount === 'number' && Number.isFinite(saved.decisionCount)
+        ? saved.decisionCount
+        : agent.memory.length;
+    agent.currentTurnGoal = saved.currentTurnGoal;
+    agent.stance = saved.stance;
+  }
+  return {
+    game: snap.game,
+    version: snap.version,
+    stall: { sig: '', count: 0 },
+    aiTimer: null,
+    aiAutoplay: Boolean(snap.flags.aiAutoplay),
+    aiHint: Boolean(snap.flags.aiHint),
+    aiBusy: false,
+    aiProvider,
+    agents,
+    tradeLedger: createAiTradeLedger(),
+    relationships: snap.relationships ?? createRelationshipLedger(snap.game.state),
+    socialChatEnabled: Boolean(snap.flags.socialChatEnabled),
+    socialBudget: createSocialBudget(),
+    socialBusy: false,
+    socialEvents: (snap.buffers?.social ?? []).slice(-SOCIAL_EVENT_BUFFER),
+    aiEvents: (snap.buffers?.ai ?? []).slice(-AI_EVENT_BUFFER),
+    tradeEvents: (snap.buffers?.trade ?? []).slice(-TRADE_EVENT_BUFFER),
+    humanTrade: null,
+    humanTradeSeq: 0,
+  };
+}
+
+function createFreshSession(): Session {
+  const game = createServerGame();
+  return {
+    game,
+    version: 0,
+    stall: { sig: '', count: 0 },
+    aiTimer: null,
+    aiAutoplay: DEFAULT_AI_AUTOPLAY,
+    aiHint: DEFAULT_AI_HINT,
+    aiBusy: false,
+    aiProvider: AI_PROVIDER,
+    agents: createAgentRuntimes(game.state, AI_PROVIDER),
+    tradeLedger: createAiTradeLedger(),
+    relationships: createRelationshipLedger(game.state),
+    socialChatEnabled: DEFAULT_SOCIAL_CHAT,
+    socialBudget: createSocialBudget(),
+    socialBusy: false,
+    socialEvents: [],
+    aiEvents: [],
+    tradeEvents: [],
+    humanTrade: null,
+    humanTradeSeq: 0,
+  };
+}
 
 function getSession(roomId: string): Session {
   let s = sessions.get(roomId);
   if (!s) {
-    const game = createServerGame();
-    s = {
-      game,
-      version: 0,
-      stall: { sig: '', count: 0 },
-      aiTimer: null,
-      aiAutoplay: DEFAULT_AI_AUTOPLAY,
-      aiHint: DEFAULT_AI_HINT,
-      aiBusy: false,
-      aiProvider: AI_PROVIDER,
-      agents: createAgentRuntimes(game.state, AI_PROVIDER),
-      tradeLedger: createAiTradeLedger(),
-      relationships: createRelationshipLedger(game.state),
-      socialChatEnabled: DEFAULT_SOCIAL_CHAT,
-      socialBudget: createSocialBudget(),
-      socialBusy: false,
-      socialEvents: [],
-      aiEvents: [],
-      tradeEvents: [],
-      humanTrade: null,
-      humanTradeSeq: 0,
-    };
+    const snap = loadSnapshot(roomId);
+    if (snap) {
+      try {
+        s = restoreSession(snap);
+        console.log(
+          `[persist] 已恢复房间 ${roomId}：game=${s.game.state.gameId}, turn=${s.game.state.turn}, version=${s.version}`,
+        );
+      } catch (err) {
+        console.warn(`[persist] 恢复房间 ${roomId} 失败，改开新局:`, err);
+        s = createFreshSession();
+      }
+    } else {
+      s = createFreshSession();
+    }
     sessions.set(roomId, s);
   }
   return s;
@@ -250,6 +307,47 @@ function stateFingerprint(s: GameState): string {
 
 function broadcastState(io: Server, roomId: string) {
   io.to(roomId).emit('sync_state', sessions.get(roomId)!.game);
+}
+
+function saveSessionSoon(roomId: string, session: Session, immediate = false) {
+  if (!persistEnabled()) return;
+  const existing = snapshotTimers.get(roomId);
+  if (existing) {
+    clearTimeout(existing);
+    snapshotTimers.delete(roomId);
+  }
+
+  const run = () => {
+    snapshotTimers.delete(roomId);
+    void saveSnapshot(roomId, session).catch((err) => {
+      console.warn(`[persist] 保存房间 ${roomId} 快照失败:`, err);
+    });
+  };
+
+  if (immediate || persistDebounceMs() === 0) {
+    run();
+    return;
+  }
+
+  snapshotTimers.set(roomId, setTimeout(run, persistDebounceMs()));
+}
+
+async function flushSessionSnapshot(roomId: string, session: Session): Promise<void> {
+  if (!persistEnabled()) return;
+  const existing = snapshotTimers.get(roomId);
+  if (existing) {
+    clearTimeout(existing);
+    snapshotTimers.delete(roomId);
+  }
+  try {
+    await saveSnapshot(roomId, session);
+  } catch (err) {
+    console.warn(`[persist] 保存房间 ${roomId} 快照失败:`, err);
+  }
+}
+
+async function flushAllSnapshots(): Promise<void> {
+  await Promise.all([...sessions.entries()].map(([roomId, session]) => flushSessionSnapshot(roomId, session)));
 }
 
 function hasAiWork(s: GameState): boolean {
@@ -330,37 +428,41 @@ function applyAction(io: Server, roomId: string, action: Action) {
   // 关系账本：捕捉强盗/最长路/最大军队/逼近胜利等敌意信号（不推断成交）
   const relEvents = applyTransition(session.relationships, session.game.board, prev, next);
   broadcastState(io, roomId);
+  saveSessionSoon(roomId, session);
   // 社交发言（旁路、异步、受开关/预算约束）；applyAction 为同步，故 fire-and-forget
   void runSocial(io, roomId, session, relEvents);
 }
 
-function pushAiEvent(session: Session, entry: AiEventLogEntry) {
+function pushAiEvent(roomId: string, session: Session, entry: AiEventLogEntry) {
   session.aiEvents.push(entry);
   if (session.aiEvents.length > AI_EVENT_BUFFER) {
     session.aiEvents.splice(0, session.aiEvents.length - AI_EVENT_BUFFER);
   }
+  void appendAiTrace(roomId, session.game.state.gameId, entry);
+  saveSessionSoon(roomId, session);
 }
 
-function pushTradeEvent(session: Session, entry: TradeEventLogEntry) {
+function pushTradeEvent(roomId: string, session: Session, entry: TradeEventLogEntry) {
   session.tradeEvents.push(entry);
   if (session.tradeEvents.length > TRADE_EVENT_BUFFER) {
     session.tradeEvents.splice(0, session.tradeEvents.length - TRADE_EVENT_BUFFER);
   }
+  saveSessionSoon(roomId, session);
 }
 
 function emitThought(io: Server, roomId: string, session: Session, ev: AiThoughtEvent) {
   rememberThought(session, ev);
-  pushAiEvent(session, { kind: 'thought', data: ev });
+  pushAiEvent(roomId, session, { kind: 'thought', data: ev });
   io.to(roomId).emit('ai_thought', ev);
 }
 
 function emitError(io: Server, roomId: string, session: Session, ev: AiErrorEvent) {
-  pushAiEvent(session, { kind: 'error', data: ev });
+  pushAiEvent(roomId, session, { kind: 'error', data: ev });
   io.to(roomId).emit('ai_error', ev);
 }
 
 function emitTradeEvent(io: Server, roomId: string, session: Session, entry: TradeEventEntry) {
-  pushTradeEvent(session, entry);
+  pushTradeEvent(roomId, session, entry);
   const eventName =
     entry.kind === 'started'
       ? 'trade_chat_started'
@@ -375,6 +477,7 @@ function emitSocialChat(io: Server, roomId: string, session: Session, ev: Social
   if (session.socialEvents.length > SOCIAL_EVENT_BUFFER) {
     session.socialEvents.splice(0, session.socialEvents.length - SOCIAL_EVENT_BUFFER);
   }
+  saveSessionSoon(roomId, session);
   io.to(roomId).emit('social_chat', ev);
 }
 
@@ -864,6 +967,7 @@ function scheduleAI(
         }
         const negoRelEvents = applyTransition(session.relationships, game.board, prevState, negotiation.nextState);
         broadcastState(io, roomId);
+        saveSessionSoon(roomId, session);
         await runSocial(io, roomId, session, negoRelEvents);
       }
       emitAiControl(io, roomId, session);
@@ -945,6 +1049,7 @@ function scheduleAI(
     // 关系账本：AI 单步可能移动强盗 / 拿下最长路最大军队 / 跨过逼近胜利线
     const stepRelEvents = applyTransition(session.relationships, game.board, prevState, outcome.nextState);
     broadcastState(io, roomId);
+    saveSessionSoon(roomId, session);
     const commitMs = Math.max(0, Date.now() - commitStartedAt);
     // 中途收集的错误（重试 / fallback）先发；成功的 thought 后发
     for (const e of outcome.errors) {
@@ -970,6 +1075,7 @@ function scheduleAI(
       outcome.nextState.phase !== 'setup2';
     if (setupJustFinished && session.aiAutoplay) {
       session.aiAutoplay = false;
+      saveSessionSoon(roomId, session);
       emitAiControl(io, roomId, session);
       return;
     }
@@ -980,19 +1086,94 @@ function scheduleAI(
   emitAiControl(io, roomId, session);
 }
 
-const httpServer = createServer((req, res) => {
-  if (req.url === '/health') {
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(
-      JSON.stringify({
-        ok: true,
-        sessions: sessions.size,
-        provider: AI_PROVIDER,
-        playerMode: PLAYER_MODE,
-      }),
-    );
-    return;
+function writeJson(res: ServerResponse, status: number, body: unknown) {
+  res.writeHead(status, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify(body));
+}
+
+function parseLimit(raw: string | null, fallback: number): number {
+  if (raw == null) return fallback;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) return fallback;
+  return Math.floor(n);
+}
+
+function recent<T>(items: T[], limit: number): T[] {
+  return items.slice(Math.max(0, items.length - limit));
+}
+
+function sessionSummary(roomId: string, session: Session) {
+  const { state } = session.game;
+  return {
+    roomId,
+    gameId: state.gameId,
+    turn: state.turn,
+    phase: state.phase,
+    current: state.current,
+    provider: getDecisionAgent(session)?.providerName ?? session.aiProvider,
+    version: session.version,
+  };
+}
+
+function handleTraceHttp(req: IncomingMessage, res: ServerResponse): boolean {
+  if (!req.url || req.method !== 'GET') return false;
+  const url = new URL(req.url, 'http://localhost');
+
+  if (url.pathname === '/health') {
+    writeJson(res, 200, {
+      ok: true,
+      sessions: sessions.size,
+      provider: AI_PROVIDER,
+      playerMode: PLAYER_MODE,
+      persist: persistEnabled(),
+    });
+    return true;
   }
+
+  if (!traceHttpEnabled()) return false;
+
+  if (url.pathname === '/api/sessions') {
+    writeJson(
+      res,
+      200,
+      [...sessions.entries()].map(([roomId, session]) => sessionSummary(roomId, session)),
+    );
+    return true;
+  }
+
+  const match = /^\/api\/traces\/(ai|trade|social)$/.exec(url.pathname);
+  if (!match) return false;
+
+  const roomId = url.searchParams.get('room') ?? DEFAULT_ROOM;
+  const session = sessions.get(roomId);
+  if (!session) {
+    writeJson(res, 404, { ok: false, error: `unknown room: ${roomId}` });
+    return true;
+  }
+
+  const kind = match[1];
+  if (kind === 'ai') {
+    writeJson(res, 200, recent(session.aiEvents, parseLimit(url.searchParams.get('limit'), session.aiEvents.length)));
+    return true;
+  }
+  if (kind === 'trade') {
+    writeJson(
+      res,
+      200,
+      recent(session.tradeEvents, parseLimit(url.searchParams.get('limit'), session.tradeEvents.length)),
+    );
+    return true;
+  }
+  writeJson(
+    res,
+    200,
+    recent(session.socialEvents, parseLimit(url.searchParams.get('limit'), session.socialEvents.length)),
+  );
+  return true;
+}
+
+const httpServer = createServer((req, res) => {
+  if (handleTraceHttp(req, res)) return;
   res.writeHead(404);
   res.end();
 });
@@ -1084,6 +1265,7 @@ io.on('connection', (socket: Socket) => {
       // 如果 LLM 正在思考，暂停应让返回结果失效，而不是继续应用到棋局。
       if (!s.aiAutoplay && s.aiBusy) s.version++;
       emitAiControl(io, DEFAULT_ROOM, s);
+      saveSessionSoon(DEFAULT_ROOM, s);
       if (s.aiAutoplay) scheduleAI(io, DEFAULT_ROOM);
       ack?.({ ok: true });
     },
@@ -1096,6 +1278,7 @@ io.on('connection', (socket: Socket) => {
       s.aiHint = Boolean(payload.hint);
       // 仅影响后续 LLM 决策；正在进行的 LLM 调用结果不作废（hint 不改变状态合法性）
       emitAiControl(io, DEFAULT_ROOM, s);
+      saveSessionSoon(DEFAULT_ROOM, s);
       ack?.({ ok: true });
     },
   );
@@ -1108,6 +1291,7 @@ io.on('connection', (socket: Socket) => {
       const s = getSession(DEFAULT_ROOM);
       s.socialChatEnabled = Boolean(payload.enabled);
       emitAiControl(io, DEFAULT_ROOM, s);
+      saveSessionSoon(DEFAULT_ROOM, s);
       ack?.({ ok: true });
     },
   );
@@ -1138,6 +1322,7 @@ io.on('connection', (socket: Socket) => {
         s.version++;
         broadcastState(io, DEFAULT_ROOM);
         emitAiControl(io, DEFAULT_ROOM, s);
+        saveSessionSoon(DEFAULT_ROOM, s);
         scheduleAI(io, DEFAULT_ROOM);
         ack?.({ ok: true });
         return;
@@ -1180,6 +1365,7 @@ io.on('connection', (socket: Socket) => {
         if (s.aiBusy) s.version++;
       }
       emitAiControl(io, DEFAULT_ROOM, s);
+      saveSessionSoon(DEFAULT_ROOM, s);
       scheduleAI(io, DEFAULT_ROOM);
       ack?.({ ok: true });
     },
@@ -1447,9 +1633,33 @@ io.on('connection', (socket: Socket) => {
     broadcastState(io, DEFAULT_ROOM);
     emitHumanTradeState(io, DEFAULT_ROOM, s);
     emitAiControl(io, DEFAULT_ROOM, s);
+    saveSessionSoon(DEFAULT_ROOM, s, true);
     scheduleAI(io, DEFAULT_ROOM);
   });
 });
+
+let shuttingDown = false;
+
+async function shutdown(signal: NodeJS.Signals) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`[catan-server] 收到 ${signal}，保存快照后退出...`);
+  const forceExit = setTimeout(() => process.exit(1), 5000);
+  try {
+    await flushAllSnapshots();
+    httpServer.close(() => {
+      clearTimeout(forceExit);
+      process.exit(0);
+    });
+  } catch (err) {
+    console.warn('[catan-server] 退出前保存快照失败:', err);
+    clearTimeout(forceExit);
+    process.exit(1);
+  }
+}
+
+process.once('SIGTERM', () => void shutdown('SIGTERM'));
+process.once('SIGINT', () => void shutdown('SIGINT'));
 
 httpServer.listen(PORT, () => {
   console.log(

@@ -51,6 +51,9 @@ shared/                ← 纯函数游戏内核：前后端共用，不依赖 D
 
 server/                ← Node + socket.io 后端，持有上帝视角状态、驱动 AI、广播变更
   index.ts             socket.io 服务 + sessions Map（MVP 单房间）；scheduleAI 走 LLM controller
+  persist.ts           PERSIST=1 时落 JSON 会话快照，重启自动续盘（server-only 旁路）
+  trace.ts             TRACE_FILE=1 时把 AI 决策事件追加写 JSONL
+  persistSmoke.ts      持久化冒烟：写快照→读快照→校验 agent 与资源守恒
   agents/              每个 AI 玩家独立 runtime（性格、短期记忆、provider 配置）
   smoke.ts             端到端冒烟脚本：连接→收 sync_state/ai_thought
   llm/                 LLM 决策层（Provider 抽象 + Maker-Checker）
@@ -158,12 +161,14 @@ LLM prompt / hint 里的骰点概率权重统一叫**产出点**，不要再写�
 
 **发展卡时序。** 购买进 `newDevCards`（本回合不可用），`endTurn` 时并入 `devCards`；`victory` 卡不进手牌、立即 `vpCards++`。每回合限打一张（`devPlayed`）。骑士卡可在 `roll`（掷骰前）或 `main` 阶段打出。
 
+**持久化与 trace（2026-05-23）。** `PERSIST=1` 时服务端把 `game`、关系账本、agent 记忆/provider、控制开关与最近事件 buffer 去抖保存到 `./.data/sessions/<room>.json`，启动 `getSession()` 时 schema 匹配则自动续盘；`aiTimer`/`aiBusy`/`humanTrade` 等运行时句柄一律不恢复。`TRACE_FILE=1` 时 `ai_thought`/`ai_error` 追加写 `./.data/traces/<gameId>-ai.jsonl`，只告警不阻塞 AI 循环。`TRACE_HTTP=1` 时开放只读 `/api/sessions` 与 `/api/traces/{ai,trade,social}`，返回内存环形 buffer；trace 含完整 prompt/modelContext，勿暴露公网。以上均为 server-only 旁路，不碰 `shared/` 与 reducer。
+
 ### 已知缺口（本轮**没做**，后期要做）
 
 - **玩家身份认证**：当前任意 socket 都能 `dispatch` 任意 action。reducer 按 `state.current` 归因，所以不能"代签其他玩家的回合"，但能干扰当前玩家。需要 player binding。
 - **人类加入席位**：当前默认 4 AI 观察局；需要 player binding 后再把某个 seat 从 AI 切成 human（临时可用 `PLAYER_MODE=human0` 恢复 P0 人类旧模式）。
 - **多房间 / 匹配**：sessions 是 Map 但只用 `'default'` 一个键。多人匹配需要房间列表 + 加入 / 离开协议。
-- **断线续盘 / 持久化**：server 重启状态丢失。需要 DB 或快照。
+- **持久化生产化**：当前只有 JSON 快照与 JSONL trace，默认关闭；长期运行还需要清理策略、快照迁移和多房间管理。
 - **LLM AI 接入**：架构留好 `aiNextAction` 入口；接入时不要改 reducer，要在 server 加 "AI 决策提供者" 抽象层（规则 AI / LLM AI 可切换）。
 - **AI 决策思考流可视化**：sync_state 现在是整包广播；未来可加 `ai_thinking` 事件让前端实时显示 LLM 推理。
 
@@ -196,6 +201,10 @@ LLM prompt / hint 里的骰点概率权重统一叫**产出点**，不要再写�
 
 `ai_thought` / `ai_error` / `ai_control_state` / `social_chat` / `relationship_state` 与 `trade_chat_*` 的 DTO 定义在 `shared/protocol.ts`。server 端有最近 60 条 AI 事件、80 条交易谈判事件、60 条社交发言环形 buffer：新连接的客户端会在 `sync_state` 之后立即补拉历史事件 + 关系账本快照。AI 自动推进默认关闭（`AI_AUTOPLAY=1` 可改默认开启），前端通过 AI 控制面板切换或单步推进。`PLAYER_MODE=human0` 可临时恢复 P0 人类 + 3 AI；默认 `all-ai`。
 
+## HTTP 调试接口
+
+`GET /health` 始终可用。`TRACE_HTTP=1` 时额外开放只读 JSON 接口：`/api/sessions` 返回房间摘要；`/api/traces/ai?room=default&limit=N`、`/api/traces/trade?...`、`/api/traces/social?...` 返回对应内存 buffer 最近 N 条。AI trace 事件可能带完整 prompt/modelContext，只用于本地调试，不要暴露公网。
+
 **AI 社交房间（2026-05-23）。** 在交易/谈判之上叠了一层"社交"，详见 `docs/ai-social-room-design.md`：
 - **关系账本** `server/social/relationshipLedger.ts`：每个玩家对他人的 `{trust,threat,debt}`，由成交（互信）/强盗（嫌隙）/最长路·最大军队·逼近胜利（警惕）等事件**确定性更新（零 LLM）**，压成一句"你对各家的看法"注入交易 prompt，影响 AI 报价/接受倾向。纯服务端编排状态，不进 `shared/`。
 - **多轮房间式谈判**：`negotiationManager` 的 AI↔AI 谈判是多轮的（参与方互相反应、发起方对最优还价回应、竞争择优原子成交），`ROOM_ROUNDS_MAX` + `messagesPerSession` 双重封顶 LLM 调用。
@@ -215,6 +224,9 @@ docker run --rm -v "$PWD":/app -w /app node:20-alpine \
 # sim 压测：默认 rule，可切到 mock 跑全 LLM 链路（catalog + checker 全开）
 AI_PROVIDER=rule  docker run --rm -e AI_PROVIDER=rule -v "$PWD":/app -w /app node:20-alpine npx --yes tsx sim.ts
 AI_PROVIDER=mock  docker run --rm -e AI_PROVIDER=mock -v "$PWD":/app -w /app node:20-alpine npx --yes tsx sim.ts
+
+# 持久化冒烟：写快照→读快照→校验 agent 与资源守恒
+docker run --rm -v "$PWD":/app -w /app node:20-alpine npx --yes tsx server/persistSmoke.ts
 ```
 
 基线（2026-05-20）：rule 60/60 局，120 平均回合，0 错误；mock 60/60 局，317 平均回合（弱启发式所以更长），0 错误。任何对 `actionCatalog` / `actionChecker.fingerprint` 的改动都跑两遍这两个 provider。
@@ -239,7 +251,7 @@ docker run --rm --network catan_default --env-file .env -e SMOKE_DRIVE=1 \
 `AI_PROVIDER=minimax`（兼容旧值 `llm`）需要 `MINIMAX_API_KEY`；`AI_PROVIDER=qwen36` 需要 `ALI_CODING_PLAN_KEY`。这些从 `.env` 注入到 `catan-server` 容器（`docker-compose.yml` 配置了 `env_file: .env`，required: false 所以缺文件也能起）。
 
 - **新机器 setup**：`cp .env.example .env`，按需填 `MINIMAX_API_KEY` 或 `ALI_CODING_PLAN_KEY`；`.env` 已在 `.gitignore`
-- **常用环境变量**：见 `.env.example`，含 `AI_PROVIDER` / `MINIMAX_API_HOST`（CN 用 `api.minimaxi.com`、国际 `api.minimax.io`）/ `LLM_MODEL` / `ALI_CODING_PLAN_BASE_URL` / `QWEN_MODEL` / `LLM_TIMEOUT_MS` / `LLM_TEMPERATURE`
+- **常用环境变量**：见 `.env.example`，含 `AI_PROVIDER` / `MINIMAX_API_HOST`（CN 用 `api.minimaxi.com`、国际 `api.minimax.io`）/ `LLM_MODEL` / `ALI_CODING_PLAN_BASE_URL` / `QWEN_MODEL` / `PERSIST` / `TRACE_FILE` / `TRACE_HTTP` / `LLM_TIMEOUT_MS` / `LLM_TEMPERATURE`
 - **快速降级**：把 `.env` 里改成 `AI_PROVIDER=rule` 或干脆删 `MINIMAX_API_KEY`，stack 会自动用规则 AI（log 里会看到 warn）
 
 ## Art / 美术风格

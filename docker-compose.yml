@@ -29,6 +29,9 @@ services:
       # LLM_TEMPERATURE=0.4  棋类决策不需要太发散
       # MINIMAX_API_HOST=api.minimaxi.com  国内端；国际版用 api.minimax.io
       # ALI_CODING_PLAN_BASE_URL=https://coding.dashscope.aliyuncs.com/v1  阿里 Qwen 兼容端点
+      # PERSIST=0           默认关闭；=1 时把续盘快照写到 ./.data/sessions
+      # TRACE_FILE=0        默认关闭；=1 时把 AI 决策 trace 写到 ./.data/traces/*.jsonl
+      # TRACE_HTTP=0        默认关闭；=1 时开放只读 /api/sessions 与 /api/traces/*
     ports:
       - "3001:3001"
     volumes:
