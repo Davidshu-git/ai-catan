@@ -25,6 +25,8 @@ import { RESOURCES, type FullGame, type GameState, type ResMap } from '../shared
 import type {
   AiControlState,
   AiModelContextEvent,
+  RelationshipSnapshotEvent,
+  SocialChatEvent,
   TradeChatClosedEvent,
   TradeChatMessageEvent,
   TradeChatStartedEvent,
@@ -33,7 +35,7 @@ import type {
   TradeOfferEvent,
 } from '../shared/protocol';
 
-import type { AiDecisionProvider, AiErrorEvent, AiThoughtEvent, AiTimingEvent } from './llm/types';
+import type { AgentPromptContext, AiDecisionProvider, AiErrorEvent, AiThoughtEvent, AiTimingEvent } from './llm/types';
 import { createRuleProvider } from './llm/ruleProvider';
 import { createMockProvider } from './llm/mockProvider';
 import { createLlmProvider } from './llm/llmProvider';
@@ -72,12 +74,29 @@ import {
   validateHumanOffer,
   type HumanTradeSession,
 } from './trading/humanTrade';
+import {
+  applyTradeOutcome,
+  applyTransition,
+  createRelationshipLedger,
+  describeRelationships,
+  snapshotLedger,
+  type RelationshipEvent,
+  type RelationshipLedger,
+} from './social/relationshipLedger';
+import {
+  createSocialBudget,
+  maybeRunSocialChat,
+  type SocialChatBudget,
+  type SocialLineFn,
+} from './social/socialChat';
+import { generateSocialLine } from './llm/socialProvider';
 
 const PORT = Number(process.env.PORT ?? 3001);
 const AI_TICK_MS = Number(process.env.AI_TICK_MS ?? 460); // 每步 AI 之间的节奏
 const STALL_LIMIT = 8; // 状态指纹连续重复阈值
 const AI_EVENT_BUFFER = 60; // 每房间缓存最近 N 条 AI 事件，用于断线后补拉
 const TRADE_EVENT_BUFFER = 80; // 每房间缓存最近 N 条交易谈判事件
+const SOCIAL_EVENT_BUFFER = 60; // 每房间缓存最近 N 条社交发言，用于断线后补拉
 const DEFAULT_ROOM = 'default'; // MVP：单房间
 const MINIMAX_MODEL = process.env.LLM_MODEL ?? 'MiniMax-M2.7';
 const QWEN_MODEL = process.env.QWEN_MODEL ?? process.env.ALI_QWEN_MODEL ?? 'qwen3.6-plus';
@@ -88,6 +107,7 @@ const QWEN_BASE_URL =
 const AI_PROVIDER = normalizeProviderName(process.env.AI_PROVIDER ?? 'minimax'); // rule | mock | minimax | qwen36
 const DEFAULT_AI_AUTOPLAY = process.env.AI_AUTOPLAY === '1'; // 默认手动，便于观察 AI 单步决策
 const DEFAULT_AI_HINT = process.env.LLM_HINT !== '0'; // LLM prompt 默认带空间动作 hint；=0 关闭
+const DEFAULT_SOCIAL_CHAT = process.env.SOCIAL_CHAT === '1'; // 自由社交聊天默认关，防 token 失控；=1 默认开
 const PLAYER_MODE = (process.env.PLAYER_MODE ?? 'all-ai').toLowerCase(); // all-ai | human0
 
 function normalizeProviderName(raw: string): string {
@@ -151,6 +171,16 @@ interface Session {
   agents: Record<number, AiAgentRuntime>;
   /** 当前回合 AI 交易谈判限流账本 */
   tradeLedger: AiTradeLedger;
+  /** 关系账本：各玩家对彼此的看法（信任/警惕/人情），由游戏事件确定性更新 */
+  relationships: RelationshipLedger;
+  /** 自由社交聊天开关（默认 DEFAULT_SOCIAL_CHAT）；运行时可由 set_social_chat 实时熄火 */
+  socialChatEnabled: boolean;
+  /** 社交发言预算（每回合/整局上限 + 每 agent 冷却） */
+  socialBudget: SocialChatBudget;
+  /** 社交发言生成中标志，避免并发触发多组社交决策 */
+  socialBusy: boolean;
+  /** 环形 buffer：最近的社交发言，用于断线后补拉 */
+  socialEvents: SocialChatEvent[];
   /** 环形 buffer：最近的 AI 决策事件，便于晚来的客户端补齐上下文 */
   aiEvents: AiEventLogEntry[];
   /** 环形 buffer：最近的交易谈判事件，便于晚来的客户端补齐上下文 */
@@ -178,6 +208,11 @@ function getSession(roomId: string): Session {
       aiProvider: AI_PROVIDER,
       agents: createAgentRuntimes(game.state, AI_PROVIDER),
       tradeLedger: createAiTradeLedger(),
+      relationships: createRelationshipLedger(game.state),
+      socialChatEnabled: DEFAULT_SOCIAL_CHAT,
+      socialBudget: createSocialBudget(),
+      socialBusy: false,
+      socialEvents: [],
       aiEvents: [],
       tradeEvents: [],
       humanTrade: null,
@@ -236,6 +271,22 @@ function getDecisionAgent(session: Session, state = session.game.state): AiAgent
   return session.agents[state.current] ?? null;
 }
 
+/**
+ * 构造某玩家的 agent prompt 上下文，并按其视角注入关系账本看法。
+ * 所有要把 agent 喂给 Provider 的地方都走这里，保证 relationships 统一注入。
+ */
+function agentPromptContextFor(
+  session: Session,
+  playerId: number,
+  state = session.game.state,
+): AgentPromptContext | undefined {
+  const rt = session.agents[playerId];
+  if (!rt) return undefined;
+  const ctx = toAgentPromptContext(rt);
+  ctx.relationships = describeRelationships(session.relationships, playerId, state);
+  return ctx;
+}
+
 function getAiControlState(session: Session): AiControlState {
   const currentAgent = getDecisionAgent(session);
   const agentProviders: Record<number, string> = {};
@@ -250,6 +301,7 @@ function getAiControlState(session: Session): AiControlState {
     busy: session.aiBusy,
     canStep: hasAiWork(session.game.state),
     hintEnabled: session.aiHint,
+    socialChatEnabled: session.socialChatEnabled,
     provider: currentAgent?.providerName ?? session.aiProvider,
     providerOptions: aiProviderOptions(),
     agentProviders,
@@ -271,12 +323,15 @@ function emitAiControl(io: Server, roomId: string, session = getSession(roomId))
 
 function applyAction(io: Server, roomId: string, action: Action) {
   const session = getSession(roomId);
-  session.game = {
-    board: session.game.board,
-    state: reduce(session.game.board, session.game.state, action),
-  };
+  const prev = session.game.state;
+  const next = reduce(session.game.board, prev, action);
+  session.game = { board: session.game.board, state: next };
   session.version++;
+  // 关系账本：捕捉强盗/最长路/最大军队/逼近胜利等敌意信号（不推断成交）
+  const relEvents = applyTransition(session.relationships, session.game.board, prev, next);
   broadcastState(io, roomId);
+  // 社交发言（旁路、异步、受开关/预算约束）；applyAction 为同步，故 fire-and-forget
+  void runSocial(io, roomId, session, relEvents);
 }
 
 function pushAiEvent(session: Session, entry: AiEventLogEntry) {
@@ -313,6 +368,72 @@ function emitTradeEvent(io: Server, roomId: string, session: Session, entry: Tra
         ? 'trade_chat_message'
         : 'trade_chat_closed';
   io.to(roomId).emit(eventName, entry.data);
+}
+
+function emitSocialChat(io: Server, roomId: string, session: Session, ev: SocialChatEvent) {
+  session.socialEvents.push(ev);
+  if (session.socialEvents.length > SOCIAL_EVENT_BUFFER) {
+    session.socialEvents.splice(0, session.socialEvents.length - SOCIAL_EVENT_BUFFER);
+  }
+  io.to(roomId).emit('social_chat', ev);
+}
+
+function relationshipSnapshotEvent(session: Session): RelationshipSnapshotEvent {
+  return { entries: snapshotLedger(session.relationships), ts: Date.now() };
+}
+
+function emitRelationshipState(io: Server, roomId: string, session = getSession(roomId)) {
+  io.to(roomId).emit('relationship_state', relationshipSnapshotEvent(session));
+}
+
+/** 社交发言生成器：按 speaker 的 agent providerName 走模板或 LLM */
+function makeSocialGenerate(session: Session): SocialLineFn {
+  return (speaker, trigger, agent) => {
+    const providerName = session.agents[speaker]?.providerName ?? session.aiProvider;
+    return generateSocialLine(
+      {
+        state: session.game.state,
+        speaker,
+        triggerKind: trigger.type,
+        triggerNote: trigger.note,
+        target: trigger.actor,
+        agent,
+      },
+      providerName,
+    );
+  };
+}
+
+/**
+ * 在一次状态跃迁的关系事件上跑社交发言。纯旁路、不改状态。
+ * 开关关 / 无事件 / 已在跑则直接跳过；跑完广播关系账本快照。
+ */
+async function runSocial(
+  io: Server,
+  roomId: string,
+  session: Session,
+  relEvents: RelationshipEvent[],
+) {
+  if (!session.socialChatEnabled || relEvents.length === 0 || session.socialBusy) return;
+  session.socialBusy = true;
+  try {
+    await maybeRunSocialChat(
+      session.game.state,
+      session.relationships,
+      relEvents,
+      session.socialBudget,
+      makeSocialGenerate(session),
+      (pid) => agentPromptContextFor(session, pid),
+      () => session.socialChatEnabled,
+      (ev) => {
+        ev.agentName = session.agents[ev.player]?.name;
+        emitSocialChat(io, roomId, session, ev);
+      },
+    );
+    emitRelationshipState(io, roomId, session);
+  } finally {
+    session.socialBusy = false;
+  }
 }
 
 function emitHumanTradeState(io: Server, roomId: string, session = getSession(roomId)) {
@@ -453,7 +574,7 @@ async function runHumanTradeRound(io: Server, roomId: string, trade: HumanTradeS
           state,
           responderId: player,
           history: trade.messages,
-          agent: agent ? toAgentPromptContext(agent) : undefined,
+          agent: agentPromptContextFor(session, player, state),
         },
         providerName,
       );
@@ -490,7 +611,7 @@ async function runHumanTradeRound(io: Server, roomId: string, trade: HumanTradeS
         offer: directOffer,
         history: trade.messages,
         counterCandidates,
-        agent: agent ? toAgentPromptContext(agent) : undefined,
+        agent: agentPromptContextFor(session, player, state),
       },
       providerName,
     );
@@ -718,10 +839,7 @@ function scheduleAI(
       return decideTradeInitiation({ board, state, initiatorId, sessionsRemaining, agent }, providerName, feedback);
     };
 
-    const getAgent = (playerId: number) => {
-      const rt = session.agents[playerId];
-      return rt ? toAgentPromptContext(rt) : undefined;
-    };
+    const getAgent = (playerId: number) => agentPromptContextFor(session, playerId, game.state);
 
     const negotiation = await maybeRunAiNegotiation(
       game.board,
@@ -736,9 +854,17 @@ function scheduleAI(
     if (negotiation) {
       // events 已在谈判过程中逐条 emit，此处只需处理成交后的状态更新
       if (negotiation.nextState) {
+        const prevState = game.state;
         session.game = { board: game.board, state: negotiation.nextState };
         session.version++;
+        // 关系账本：先记成交（合意建立互信），再记跃迁里的其他敌意信号
+        const t = negotiation.acceptedTrade;
+        if (t && t.to != null) {
+          applyTradeOutcome(session.relationships, prevState, t.from, t.to, t.give, t.receive);
+        }
+        const negoRelEvents = applyTransition(session.relationships, game.board, prevState, negotiation.nextState);
         broadcastState(io, roomId);
+        await runSocial(io, roomId, session, negoRelEvents);
       }
       emitAiControl(io, roomId, session);
       if (session.aiAutoplay && !opts.singleStep) scheduleAI(io, roomId);
@@ -813,8 +939,11 @@ function scheduleAI(
     // 应用新状态并广播
     const commitStartedAt = Date.now();
     const prevPhase = game.state.phase;
+    const prevState = game.state;
     session.game = { board: game.board, state: outcome.nextState };
     session.version++;
+    // 关系账本：AI 单步可能移动强盗 / 拿下最长路最大军队 / 跨过逼近胜利线
+    const stepRelEvents = applyTransition(session.relationships, game.board, prevState, outcome.nextState);
     broadcastState(io, roomId);
     const commitMs = Math.max(0, Date.now() - commitStartedAt);
     // 中途收集的错误（重试 / fallback）先发；成功的 thought 后发
@@ -829,6 +958,9 @@ function scheduleAI(
         withScheduleTiming(outcome.thought, scheduledAt, stepStartedAt, commitMs),
       );
     }
+
+    // 社交发言（旁路、受开关/预算约束）；在 AI 单线程循环内 await，无并发
+    await runSocial(io, roomId, session, stepRelEvents);
 
     // 开局选点（setup1/setup2）全部完成、刚进入正式回合（roll）时，自动暂停 autoplay：
     // 让观察者先审视各家初始布局，再手动点继续。setup→非 setup 每局只发生一次，故只触发一次。
@@ -890,6 +1022,10 @@ io.on('connection', (socket: Socket) => {
       entry.data,
     );
   }
+  for (const ev of session.socialEvents) {
+    socket.emit('social_chat', ev);
+  }
+  socket.emit('relationship_state', relationshipSnapshotEvent(session));
   socket.emit(
     'human_trade_state',
     humanTradeStateEvent(session.game.board, session.game.state, session.humanTrade),
@@ -922,6 +1058,7 @@ io.on('connection', (socket: Socket) => {
       const from = state.current;
       const accepted = aiAcceptsTrade(state, payload.target, payload.give, payload.receive);
       if (accepted) {
+        applyTradeOutcome(s.relationships, state, from, payload.target, payload.give, payload.receive);
         applyAction(io, DEFAULT_ROOM, {
           type: 'TRADE_EXECUTE',
           from,
@@ -958,6 +1095,18 @@ io.on('connection', (socket: Socket) => {
       const s = getSession(DEFAULT_ROOM);
       s.aiHint = Boolean(payload.hint);
       // 仅影响后续 LLM 决策；正在进行的 LLM 调用结果不作废（hint 不改变状态合法性）
+      emitAiControl(io, DEFAULT_ROOM, s);
+      ack?.({ ok: true });
+    },
+  );
+
+  // 自由社交聊天开关：默认关。关闭即实时刹车——maybeRunSocialChat 的 isEnabled() 回调
+  // 每条发言前后都查 session.socialChatEnabled，生成中途被关则丢弃结果、不再 emit。
+  socket.on(
+    'set_social_chat',
+    (payload: { enabled: boolean }, ack?: (r: { ok: boolean }) => void) => {
+      const s = getSession(DEFAULT_ROOM);
+      s.socialChatEnabled = Boolean(payload.enabled);
       emitAiControl(io, DEFAULT_ROOM, s);
       ack?.({ ok: true });
     },
@@ -1221,6 +1370,14 @@ io.on('connection', (socket: Socket) => {
         give: cloneRes(deal.give),
         receive: cloneRes(deal.receive),
       };
+      applyTradeOutcome(
+        s.relationships,
+        s.game.state,
+        finalTrade.from,
+        deal.player,
+        finalTrade.give,
+        finalTrade.receive,
+      );
       applyAction(io, DEFAULT_ROOM, {
         type: 'TRADE_EXECUTE',
         from: finalTrade.from,
@@ -1280,6 +1437,9 @@ io.on('connection', (socket: Socket) => {
       if (saved) agent.providerName = saved;
     }
     s.tradeLedger = createAiTradeLedger();
+    s.relationships = createRelationshipLedger(s.game.state);
+    s.socialBudget = createSocialBudget(); // 新局清空社交预算（开关沿用观察者设置）
+    s.socialEvents = [];
     s.aiEvents = [];
     s.tradeEvents = [];
     s.humanTrade = null;

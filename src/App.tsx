@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { io, type Socket } from 'socket.io-client';
 import { Board, type BoardMode } from './components/Board';
-import { playerDisplayName } from '../shared/state';
+import { PLAYER_ART_COLORS, playerDisplayName } from '../shared/state';
 import { robberCandidates, type Action } from '../shared/reducer';
 import type {
   AiControlState,
@@ -11,6 +11,8 @@ import type {
   AiTimingEvent,
   AiThoughtEvent,
   HumanTradeStateEvent,
+  RelationshipSnapshotEvent,
+  SocialChatEvent,
   TradeChatClosedEvent,
   TradeChatMessageEvent,
   TradeChatStartedEvent,
@@ -175,16 +177,18 @@ type AiStepTimer = {
   lastMs: number | null;
   lastOk: boolean | null;
 };
-type SidebarEventTab = 'human' | 'thoughts' | 'trades' | 'log';
+type SidebarEventTab = 'human' | 'thoughts' | 'trades' | 'room' | 'log';
 
 const THOUGHT_LOG_MAX = 80;
 const TRADE_LOG_MAX = 120;
+const SOCIAL_LOG_MAX = 80;
 const DEFAULT_AI_CONTROL: AiControlState = {
   autoplay: false,
   queued: false,
   busy: false,
   canStep: false,
   hintEnabled: true,
+  socialChatEnabled: false,
   provider: 'unknown',
   providerOptions: [],
   agentProviders: {},
@@ -297,6 +301,8 @@ export function App() {
   const [toast, setToast] = useState<string | null>(null);
   const [thoughtLog, setThoughtLog] = useState<ThoughtLogItem[]>([]);
   const [tradeLog, setTradeLog] = useState<TradeLogItem[]>([]);
+  const [socialLog, setSocialLog] = useState<SocialChatEvent[]>([]);
+  const [relationships, setRelationships] = useState<RelationshipSnapshotEvent | null>(null);
   const [humanTradeState, setHumanTradeState] =
     useState<HumanTradeStateEvent>(EMPTY_HUMAN_TRADE_STATE);
   const [aiFocus, setAiFocus] = useState<AiBoardFocus | null>(null);
@@ -362,6 +368,10 @@ export function App() {
 
   const setAiHint = useCallback((hint: boolean) => {
     socket.emit('set_ai_hint', { hint });
+  }, []);
+
+  const setSocialChat = useCallback((enabled: boolean) => {
+    socket.emit('set_social_chat', { enabled });
   }, []);
 
   const setAiProvider = useCallback((playerId: number, provider: string) => {
@@ -506,6 +516,12 @@ export function App() {
       appendTrade({ kind: 'message', data: ev });
     const onTradeClosed = (ev: TradeChatClosedEvent) =>
       appendTrade({ kind: 'closed', data: ev });
+    const onSocialChat = (ev: SocialChatEvent) =>
+      setSocialLog((arr) => {
+        const next = [...arr, ev];
+        return next.length > SOCIAL_LOG_MAX ? next.slice(-SOCIAL_LOG_MAX) : next;
+      });
+    const onRelationship = (ev: RelationshipSnapshotEvent) => setRelationships(ev);
     const onHumanTradeState = (ev: HumanTradeStateEvent) => setHumanTradeState(ev);
     const onAiControl = (ev: AiControlState) => {
       setAiControl(ev);
@@ -534,6 +550,8 @@ export function App() {
     socket.on('trade_chat_started', onTradeStarted);
     socket.on('trade_chat_message', onTradeMessage);
     socket.on('trade_chat_closed', onTradeClosed);
+    socket.on('social_chat', onSocialChat);
+    socket.on('relationship_state', onRelationship);
     socket.on('human_trade_state', onHumanTradeState);
     socket.on('ai_control_state', onAiControl);
     return () => {
@@ -545,6 +563,8 @@ export function App() {
       socket.off('trade_chat_started', onTradeStarted);
       socket.off('trade_chat_message', onTradeMessage);
       socket.off('trade_chat_closed', onTradeClosed);
+      socket.off('social_chat', onSocialChat);
+      socket.off('relationship_state', onRelationship);
       socket.off('human_trade_state', onHumanTradeState);
       socket.off('ai_control_state', onAiControl);
     };
@@ -566,6 +586,8 @@ export function App() {
       prevGameIdRef.current = gid;
       setThoughtLog([]);
       setTradeLog([]);
+      setSocialLog([]);
+      setRelationships(null);
       setHumanTradeState(EMPTY_HUMAN_TRADE_STATE);
       setAiFocus(null);
       aiStepAckedRef.current = false;
@@ -707,6 +729,8 @@ export function App() {
           onTabChange={setSidebarEventTab}
           thoughtItems={thoughtLog}
           tradeItems={tradeLog}
+          socialItems={socialLog}
+          relationships={relationships}
           game={game}
           mode={mode}
           setMode={setMode}
@@ -725,6 +749,7 @@ export function App() {
             onAutoplay={setAiAutoplay}
             onStep={stepAi}
             onToggleHint={setAiHint}
+            onToggleSocialChat={setSocialChat}
           />
         </div>
       </aside>
@@ -760,6 +785,7 @@ function AiControls({
   onAutoplay,
   onStep,
   onToggleHint,
+  onToggleSocialChat,
 }: {
   control: AiControlState;
   connected: boolean;
@@ -767,6 +793,7 @@ function AiControls({
   onAutoplay: (autoplay: boolean) => void;
   onStep: () => void;
   onToggleHint: (hint: boolean) => void;
+  onToggleSocialChat: (enabled: boolean) => void;
 }) {
   const waiting = control.queued || control.busy;
   const stepDisabled = stepTimer.running || !connected || control.autoplay || waiting || !control.canStep;
@@ -792,6 +819,17 @@ function AiControls({
         </button>
         <button className="btn" disabled={stepDisabled} onClick={onStep}>
           单步
+        </button>
+      </div>
+      <div className="btn-grid">
+        <button
+          type="button"
+          className={`btn${control.socialChatEnabled ? ' primary' : ''}`}
+          disabled={!connected}
+          onClick={() => onToggleSocialChat(!control.socialChatEnabled)}
+          title="自由社交聊天（嘴炮/结盟/威胁）总开关。默认关；开启会按事件触发额外 LLM 调用，token 一冒头可随时关。关系账本不受影响。"
+        >
+          {control.socialChatEnabled ? '社交聊天：开 🔥' : '社交聊天：关'}
         </button>
       </div>
     </div>
@@ -1693,6 +1731,8 @@ function SidebarEventPanel({
   onTabChange,
   thoughtItems,
   tradeItems,
+  socialItems,
+  relationships,
   game,
   mode,
   setMode,
@@ -1707,6 +1747,8 @@ function SidebarEventPanel({
   onTabChange: (tab: SidebarEventTab) => void;
   thoughtItems: ThoughtLogItem[];
   tradeItems: TradeLogItem[];
+  socialItems: SocialChatEvent[];
+  relationships: RelationshipSnapshotEvent | null;
   game: FullGame;
   mode: BoardMode;
   setMode: (mode: BoardMode) => void;
@@ -1752,6 +1794,15 @@ function SidebarEventPanel({
         </button>
         <button
           type="button"
+          className={activeTab === 'room' ? 'active' : ''}
+          role="tab"
+          aria-selected={activeTab === 'room'}
+          onClick={() => onTabChange('room')}
+        >
+          社交房间
+        </button>
+        <button
+          type="button"
           className={activeTab === 'log' ? 'active' : ''}
           role="tab"
           aria-selected={activeTab === 'log'}
@@ -1793,10 +1844,116 @@ function SidebarEventPanel({
             )}
           </div>
         )}
+        {activeTab === 'room' && (
+          <RoomContent items={socialItems} relationships={relationships} players={players} />
+        )}
         {activeTab === 'log' && (
           <LogContent state={state} />
         )}
       </div>
+    </div>
+  );
+}
+
+// ---------- 社交房间：关系账本 + 社交发言时间线 ----------
+
+const SOCIAL_KIND_LABEL: Record<SocialChatEvent['kind'], string> = {
+  taunt: '嘲讽',
+  ally: '结盟',
+  threat: '威胁',
+  gloat: '炫耀',
+  chat: '闲聊',
+};
+
+function RoomContent({
+  items,
+  relationships,
+  players,
+}: {
+  items: SocialChatEvent[];
+  relationships: RelationshipSnapshotEvent | null;
+  players: FullGame['state']['players'];
+}) {
+  const reversed = [...items].slice(-60).reverse();
+  return (
+    <div className="room-tab">
+      <RelationshipMatrix relationships={relationships} players={players} />
+      <div className="room-social-stream">
+        {reversed.length === 0 ? (
+          <p className="cost">社交聊天默认关闭。开启「社交聊天」后，AI 会就强盗、最长路、逼近胜利等事件互相喊话。</p>
+        ) : (
+          reversed.map((ev, i) => (
+            <div key={`${ev.ts}-${i}`} className="room-social-line">
+              <span className="room-social-who" style={{ color: PLAYER_ART_COLORS[ev.player] }}>
+                {ev.agentName ?? playerDisplayName(players, ev.player)}
+              </span>
+              <span className="room-social-kind">{SOCIAL_KIND_LABEL[ev.kind] ?? ev.kind}</span>
+              <span className="room-social-msg">{ev.message}</span>
+              {ev.target != null && ev.target !== ev.player && (
+                <span className="room-social-target">→ {playerDisplayName(players, ev.target)}</span>
+              )}
+            </div>
+          ))
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** 关系账本矩阵：行=观察者，列=对象；显示信任/警惕的色块 */
+function RelationshipMatrix({
+  relationships,
+  players,
+}: {
+  relationships: RelationshipSnapshotEvent | null;
+  players: FullGame['state']['players'];
+}) {
+  const ids = players.map((p) => p.id);
+  const cell = (viewer: number, target: number) =>
+    relationships?.entries.find((e) => e.viewer === viewer && e.target === target) ?? null;
+  // 信任绿、警惕红；强度映射到透明度
+  const cellStyle = (c: ReturnType<typeof cell>) => {
+    if (!c) return undefined;
+    const net = c.trust - c.threat;
+    const mag = Math.min(1, Math.abs(net) / 30);
+    const rgb = net >= 0 ? '90,150,90' : '170,70,60';
+    return { background: `rgba(${rgb},${0.12 + mag * 0.5})` };
+  };
+  return (
+    <div className="rel-matrix">
+      <div className="rel-matrix-title">关系账本（行对列的看法：信任绿 / 警惕红）</div>
+      <table>
+        <thead>
+          <tr>
+            <th />
+            {ids.map((t) => (
+              <th key={t} style={{ color: PLAYER_ART_COLORS[t] }}>
+                {playerDisplayName(players, t)}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {ids.map((v) => (
+            <tr key={v}>
+              <th style={{ color: PLAYER_ART_COLORS[v] }}>{playerDisplayName(players, v)}</th>
+              {ids.map((t) => {
+                if (v === t) return <td key={t} className="rel-self">—</td>;
+                const c = cell(v, t);
+                return (
+                  <td
+                    key={t}
+                    style={cellStyle(c)}
+                    title={c ? `信任 ${c.trust}｜警惕 ${c.threat}｜人情 ${c.debt}` : '中立'}
+                  >
+                    {c ? `${c.trust}/${c.threat}` : '·'}
+                  </td>
+                );
+              })}
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }

@@ -5,15 +5,18 @@
 // 本模块只负责会话结构、报价校验和 standing deals 推导。
 // ============================================================
 
-import { reduce } from '../../shared/reducer';
 import { playerDisplayName } from '../../shared/state';
-import { RESOURCES, type Board, type GameState, type ResMap } from '../../shared/types';
+import type { Board, GameState, ResMap } from '../../shared/types';
 import type {
   HumanStandingDeal,
   HumanTradeStateEvent,
   TradeChatMessageEvent,
   TradeOfferEvent,
 } from '../../shared/protocol';
+import { cloneOffer, cloneRes, dryRunTrade, emptyRes, hasResources, resStr, resTotal } from './roomCore';
+
+// 资源/成交原语统一在 roomCore；这里 re-export 给 server/index.ts 沿用旧导入路径。
+export { cloneOffer, cloneRes, emptyRes, resStr, resTotal };
 
 export const HUMAN_TRADE_LIMITS = {
   messagesPerSession: 8,
@@ -42,34 +45,6 @@ export interface HumanTradeSession {
   busy: boolean;
 }
 
-export function emptyRes(): ResMap {
-  return { 木: 0, 砖: 0, 羊: 0, 麦: 0, 矿: 0 };
-}
-
-export function cloneRes(res: ResMap): ResMap {
-  return { ...res };
-}
-
-export function cloneOffer(o: TradeOfferEvent): TradeOfferEvent {
-  return { from: o.from, to: o.to, give: cloneRes(o.give), receive: cloneRes(o.receive) };
-}
-
-export function resTotal(res: ResMap): number {
-  return RESOURCES.reduce((sum, r) => sum + (res[r] ?? 0), 0);
-}
-
-export function resStr(res: ResMap): string {
-  return (
-    RESOURCES.filter((r) => (res[r] ?? 0) > 0)
-      .map((r) => `${r}×${res[r]}`)
-      .join(' ') || '无'
-  );
-}
-
-function has(state: GameState, player: number, res: ResMap): boolean {
-  return RESOURCES.every((r) => state.players[player].resources[r] >= (res[r] ?? 0));
-}
-
 /** 校验真人报价；ok 返回 null，否则返回错误原因 */
 export function validateHumanOffer(
   state: GameState,
@@ -83,17 +58,11 @@ export function validateHumanOffer(
   if (giveCount > HUMAN_TRADE_LIMITS.maxGiveCards) {
     return `给出 ${giveCount} 张超过上限 ${HUMAN_TRADE_LIMITS.maxGiveCards} 张。`;
   }
-  if (!has(state, initiator, give)) return '你没有足够的资源给出这笔报价。';
+  if (!hasResources(state, initiator, give)) return '你没有足够的资源给出这笔报价。';
   return null;
 }
 
-function resourceSig(state: GameState): string {
-  return state.players
-    .map((p) => RESOURCES.map((r) => p.resources[r]).join(','))
-    .join('|');
-}
-
-/** dry-run 一笔成交：双方资源足够且确实改变状态才算可成交 */
+/** dry-run 一笔成交：双方资源足够且确实改变状态才算可成交（统一走 roomCore.dryRunTrade） */
 export function dryRunExecutable(
   board: Board,
   state: GameState,
@@ -102,16 +71,7 @@ export function dryRunExecutable(
   give: ResMap,
   receive: ResMap,
 ): boolean {
-  if (resTotal(give) === 0 && resTotal(receive) === 0) return false;
-  if (!has(state, from, give) || !has(state, to, receive)) return false;
-  const next = reduce(board, state, {
-    type: 'TRADE_EXECUTE',
-    from,
-    to,
-    give: cloneRes(give),
-    receive: cloneRes(receive),
-  });
-  return resourceSig(next) !== resourceSig(state);
+  return dryRunTrade(board, state, { from, to, give, receive }) != null;
 }
 
 /** 各 AI 姿态 → 真人可一键成交候选（真人视角） */

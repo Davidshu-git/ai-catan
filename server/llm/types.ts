@@ -33,6 +33,12 @@ export interface AgentPromptContext {
   currentTurnGoal?: string;
   /** 较慢变化的策略阶段（如"最长路+城市混合"）；可选 */
   stance?: string;
+  /**
+   * 关系账本压成的一句话看法（见 server/social/relationshipLedger.ts）。
+   * 由 server 在构造上下文时按 viewer 注入；全中立时为空串。
+   * 当前仅交易 prompt 消费，影响 AI 报价 / 接受倾向。
+   */
+  relationships?: string;
 }
 
 /** 单条合法动作：稳定 ID + 中文摘要 + 真正派发的 Action */

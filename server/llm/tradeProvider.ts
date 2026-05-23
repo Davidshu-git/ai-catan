@@ -271,6 +271,7 @@ function buildRespondUserMessage(input: TradeResponseInput): string {
     if (agent.memory.length > 0) {
       parts.push(`近期记忆：${agent.memory.slice(-3).join(' | ')}`);
     }
+    if (agent.relationships) parts.push(`你对各家的看法：${agent.relationships}`);
     parts.push('');
   }
 
@@ -339,6 +340,7 @@ function buildProposeUserMessage(input: TradeProposeInput): string {
     parts.push(`你的角色：${agent.name}（${agent.personality}）`);
     if (agent.currentTurnGoal) parts.push(`本回合目标：${agent.currentTurnGoal}`);
     if (agent.stance) parts.push(`当前策略：${agent.stance}`);
+    if (agent.relationships) parts.push(`你对各家的看法：${agent.relationships}`);
     parts.push('');
   }
 
@@ -379,6 +381,7 @@ function buildChatUserMessage(input: TradeChatInput): string {
     if (agent.memory.length > 0) {
       parts.push(`近期记忆：${agent.memory.slice(-4).join(' | ')}`);
     }
+    if (agent.relationships) parts.push(`你对各家的看法：${agent.relationships}`);
     parts.push('');
   }
 
@@ -415,6 +418,7 @@ function buildInitiateUserMessage(input: TradeInitiationInput, feedback?: string
     parts.push(`你的角色：${agent.name}（${agent.personality}）`);
     if (agent.currentTurnGoal) parts.push(`本回合目标：${agent.currentTurnGoal}`);
     if (agent.stance) parts.push(`当前策略：${agent.stance}`);
+    if (agent.relationships) parts.push(`你对各家的看法：${agent.relationships}`);
     parts.push('');
   }
 
@@ -456,7 +460,7 @@ function buildInitiateUserMessage(input: TradeInitiationInput, feedback?: string
 
 // ---------- LLM 调用 ----------
 
-async function callLlm(providerName: string, system: string, user: string): Promise<string> {
+export async function callLlm(providerName: string, system: string, user: string): Promise<string> {
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), TRADE_TIMEOUT_MS);
 
@@ -541,7 +545,7 @@ async function callLlm(providerName: string, system: string, user: string): Prom
 
 // ---------- JSON 解析 ----------
 
-function extractJson(raw: string): unknown {
+export function extractJson(raw: string): unknown {
   const t = raw.trim();
   for (const fn of [
     () => JSON.parse(t),
@@ -643,7 +647,7 @@ function buildTradeModelContext(
 }
 
 /** 给前端展示用的 provider 标签（含模型 ID） */
-function providerLabel(providerName: string): string {
+export function providerLabel(providerName: string): string {
   if (providerName === 'minimax')
     return `minimax(${process.env.LLM_MODEL ?? 'MiniMax-M2.7'})`;
   if (providerName === 'qwen36')

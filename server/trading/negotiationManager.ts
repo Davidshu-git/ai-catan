@@ -5,7 +5,6 @@
 // tradeDecide 函数由 server/index.ts 按玩家注入（持有 providerName）。
 // ============================================================
 
-import { reduce, type Action } from '../../shared/reducer';
 import {
   COSTS,
   RESOURCES,
@@ -24,6 +23,7 @@ import {
   publicVP,
 } from '../../shared/rules';
 import { playerDisplayName } from '../../shared/state';
+import { cloneOffer, cloneRes, dryRunTrade, hasResources, resStr } from './roomCore';
 import type {
   TradeChatClosedEvent,
   TradeChatMessageEvent,
@@ -43,11 +43,17 @@ import {
 
 const TRADE_LIMITS = {
   sessionsPerTurn: 2,
-  messagesPerSession: 8,
-  offersPerSession: 2,
-  counterOffersPerSession: 1,
-  repliesPerPlayer: 2,
+  // 多轮房间式谈判放宽预算，但 messagesPerSession 仍是每个 session 的 LLM 调用硬上限。
+  messagesPerSession: 12,
+  offersPerSession: 5,
+  counterOffersPerSession: 4,
+  // 每人发言上限 3：发起方=开场白(1)+最多2次反应；参与方=最多 3 轮反应。
+  repliesPerPlayer: 3,
 };
+
+// 一个 session 内"参与方互相反应 + 发起方回应"的最大轮数。
+// 配合 messagesPerSession 双重封顶 LLM 调用次数，避免 token 失控。
+const ROOM_ROUNDS_MAX = Math.max(1, Number(process.env.ROOM_ROUNDS_MAX ?? 2));
 
 // LLM 自由报价的安全上限：give 最多 4 张（允许"高报价"换紧缺资源），receive 最多 3 张
 const MAX_GIVE_CARDS = 4;
@@ -86,6 +92,8 @@ export type TradeEventEntry =
 export interface AiNegotiationResult {
   events: TradeEventEntry[];
   nextState: GameState | null;
+  /** 成交时的最终报价（from/to/give/receive）；供关系账本记账，未成交为 undefined */
+  acceptedTrade?: TradeOfferEvent;
 }
 
 /**
@@ -272,87 +280,113 @@ export async function maybeRunAiNegotiation(
     );
   }
 
-  for (const participant of resolved.participants) {
-    if (!canSpeak(counters, participant)) continue;
+  // ── 多轮房间式谈判 ──────────────────────────────────────
+  // 与旧的"每人回应一次"不同：参与方每轮都能看到完整 history（含其他人本轮/上轮的
+  // 还价、发起方的反应），从而互相反应；发起方每轮挑一个对自己最有利的还价回应；
+  // 同一轮多人接受底价时竞争择优、原子只成交一笔。轮数 + messagesPerSession 双重封顶。
+  const live = new Set<number>(resolved.participants); // 仍在场的参与方
+  const standingCounters = new Map<number, TradeOfferEvent>(); // participant → 桌上挂着的还价
 
-    const directOffer: TradeOfferEvent = {
-      from: initiator,
-      to: participant,
-      give: cloneRes(resolved.offer.give),
-      receive: cloneRes(resolved.offer.receive),
-    };
-    const counterCandidates = buildCounterCandidates(state, directOffer);
+  for (let round = 0; round < ROOM_ROUNDS_MAX && live.size > 0; round++) {
+    let progressed = false;
+    const roundAccepts: TradeOfferEvent[] = []; // 本轮直接接受底价的报价（initiator→participant）
 
-    // 参与方 LLM 决策
-    const resp = await tradeDecide(
-      participant,
-      board,
-      state,
-      directOffer,
-      history(),
-      getAgent(participant),
-    );
+    // (a) 参与方依次反应（看完整 history，竞争压力来自看到他人报价）
+    for (const participant of resolved.participants) {
+      if (!live.has(participant)) continue;
+      if (!canSpeak(counters, participant)) continue;
 
-    const respMeta: MessageMeta = {
-      modelContext: resp.modelContext,
-      rawOutput: resp.rawOutput,
-      provider: resp.provider,
-    };
+      const directOffer: TradeOfferEvent = {
+        from: initiator,
+        to: participant,
+        give: cloneRes(resolved.offer.give),
+        receive: cloneRes(resolved.offer.receive),
+      };
+      const counterCandidates = buildCounterCandidates(state, directOffer);
+      const resp = await tradeDecide(participant, board, state, directOffer, history(), getAgent(participant));
+      progressed = true;
+      const respMeta: MessageMeta = {
+        modelContext: resp.modelContext,
+        rawOutput: resp.rawOutput,
+        provider: resp.provider,
+      };
 
-    if (resp.decision === 'ACCEPT') {
-      pushMessage(push, sessionId, state.turn, counters, limits, participant, 'ACCEPT', resp.message, directOffer, respMeta);
-      return closeAccepted(board, state, ledger, push, sessionId, limits, directOffer);
+      if (resp.decision === 'ACCEPT') {
+        pushMessage(push, sessionId, state.turn, counters, limits, participant, 'ACCEPT', resp.message, directOffer, respMeta);
+        roundAccepts.push(directOffer);
+        live.delete(participant);
+        standingCounters.delete(participant);
+        continue;
+      }
+
+      if (
+        resp.decision === 'COUNTER_OFFER' &&
+        counters.counterOffersUsed < TRADE_LIMITS.counterOffersPerSession
+      ) {
+        const chosen = counterCandidates.find((c) => c.id === resp.counterId);
+        if (chosen) {
+          counters.counterOffersUsed++;
+          counters.offersUsed++;
+          const counterOffer: TradeOfferEvent = {
+            from: participant,
+            to: initiator,
+            give: cloneRes(chosen.give),
+            receive: cloneRes(chosen.receive),
+          };
+          pushMessage(push, sessionId, state.turn, counters, limits, participant, 'COUNTER_OFFER', resp.message, counterOffer, respMeta);
+          standingCounters.set(participant, counterOffer); // 等发起方本轮统一反应
+          continue;
+        }
+      }
+
+      // REJECT 或还价解析失败 → 退出本场
+      pushMessage(push, sessionId, state.turn, counters, limits, participant, 'REJECT', resp.message, directOffer, respMeta);
+      live.delete(participant);
+      standingCounters.delete(participant);
     }
 
-    if (
-      resp.decision === 'COUNTER_OFFER' &&
-      counters.counterOffersUsed < TRADE_LIMITS.counterOffersPerSession
-    ) {
-      const chosen = counterCandidates.find((c) => c.id === resp.counterId);
-      if (chosen) {
-        counters.counterOffersUsed++;
-        counters.offersUsed++;
-        const counterOffer: TradeOfferEvent = {
-          from: participant,
-          to: initiator,
-          give: cloneRes(chosen.give),
-          receive: cloneRes(chosen.receive),
-        };
-        pushMessage(push, sessionId, state.turn, counters, limits, participant, 'COUNTER_OFFER', resp.message, counterOffer, respMeta);
+    // (b) 本轮有人直接接受底价 → 竞争择优、原子只成交一笔
+    if (roundAccepts.length > 0) {
+      const best = pickBestForInitiator(state, initiator, roundAccepts);
+      return closeAccepted(board, state, ledger, push, sessionId, limits, best);
+    }
 
-        // 发起方回应还价（无进一步还价选项）
-        if (canSpeak(counters, initiator)) {
-          const initiatorResp = await tradeDecide(
-            initiator,
-            board,
-            state,
-            counterOffer,
-            history(),
-            getAgent(initiator),
-          );
-          const initMeta: MessageMeta = {
-            modelContext: initiatorResp.modelContext,
-            rawOutput: initiatorResp.rawOutput,
-            provider: initiatorResp.provider,
-          };
-          if (initiatorResp.decision === 'ACCEPT') {
-            pushMessage(push, sessionId, state.turn, counters, limits, initiator, 'ACCEPT', initiatorResp.message, counterOffer, initMeta);
-            return closeAccepted(board, state, ledger, push, sessionId, limits, counterOffer);
-          }
-          pushMessage(push, sessionId, state.turn, counters, limits, initiator, 'REJECT', initiatorResp.message, counterOffer, initMeta);
+    // (c) 发起方对桌上"对自己最有利"的一个还价反应一次
+    if (standingCounters.size > 0 && canSpeak(counters, initiator)) {
+      let bestParticipant = -1;
+      let bestCounter: TradeOfferEvent | null = null;
+      for (const [p, offer] of standingCounters) {
+        if (!bestCounter || initiatorScore(state, initiator, offer) > initiatorScore(state, initiator, bestCounter)) {
+          bestParticipant = p;
+          bestCounter = offer;
         }
-        continue;
+      }
+      if (bestCounter) {
+        const initiatorResp = await tradeDecide(initiator, board, state, bestCounter, history(), getAgent(initiator));
+        progressed = true;
+        const initMeta: MessageMeta = {
+          modelContext: initiatorResp.modelContext,
+          rawOutput: initiatorResp.rawOutput,
+          provider: initiatorResp.provider,
+        };
+        if (initiatorResp.decision === 'ACCEPT') {
+          pushMessage(push, sessionId, state.turn, counters, limits, initiator, 'ACCEPT', initiatorResp.message, bestCounter, initMeta);
+          return closeAccepted(board, state, ledger, push, sessionId, limits, bestCounter);
+        }
+        // 拒了最优还价 → 该还价作废、提出者退出（其余还价留到下一轮再议）
+        pushMessage(push, sessionId, state.turn, counters, limits, initiator, 'REJECT', initiatorResp.message, bestCounter, initMeta);
+        standingCounters.delete(bestParticipant);
+        live.delete(bestParticipant);
       }
     }
 
-    // REJECT 或 COUNTER_OFFER 解析失败
-    pushMessage(push, sessionId, state.turn, counters, limits, participant, 'REJECT', resp.message, directOffer, respMeta);
+    if (!progressed) break; // 无人能继续发言 → 收摊
   }
 
   ledger.rejectedOfferKeys[resolved.offerKey] = true;
   push({
     kind: 'closed',
-    data: closeEvent(sessionId, state.turn, 'rejected', '所有参与 AI 均拒绝或还价未达成', limits()),
+    data: closeEvent(sessionId, state.turn, 'rejected', '多轮谈判未达成：参与 AI 均拒绝或还价未被接受', limits()),
   });
   return { events, nextState: null };
 }
@@ -557,6 +591,26 @@ function resourceNeed(resources: ResMap, r: Resource): number {
   return RESOURCE_WEIGHT[r] / (1 + resources[r]);
 }
 
+/** 从发起方视角给一个报价打分：在 TradeOfferEvent 里 from 给 give、收 receive。 */
+function initiatorScore(state: GameState, initiator: number, offer: TradeOfferEvent): number {
+  const gain = offer.from === initiator ? offer.receive : offer.give;
+  const loss = offer.from === initiator ? offer.give : offer.receive;
+  return participantScore(state, initiator, gain, loss);
+}
+
+/** 多人接受/还价时，选对发起方最有利的一笔（竞争择优）。 */
+function pickBestForInitiator(
+  state: GameState,
+  initiator: number,
+  offers: TradeOfferEvent[],
+): TradeOfferEvent {
+  let best = offers[0];
+  for (const o of offers) {
+    if (initiatorScore(state, initiator, o) > initiatorScore(state, initiator, best)) best = o;
+  }
+  return best;
+}
+
 function closeAccepted(
   board: Board,
   state: GameState,
@@ -585,23 +639,7 @@ function closeAccepted(
       trade,
     ),
   });
-  return { events, nextState: executed };
-}
-
-function dryRunTrade(board: Board, state: GameState, trade: TradeOfferEvent): GameState | null {
-  if (trade.to == null) return null;
-  if (!hasResources(state, trade.from, trade.give)) return null;
-  if (!hasResources(state, trade.to, trade.receive)) return null;
-  const action: Action = {
-    type: 'TRADE_EXECUTE',
-    from: trade.from,
-    to: trade.to,
-    give: cloneRes(trade.give),
-    receive: cloneRes(trade.receive),
-  };
-  const before = tradeResourceSignature(state);
-  const next = reduce(board, state, action);
-  return tradeResourceSignature(next) === before ? null : next;
+  return { events, nextState: executed, acceptedTrade: cloneOffer(trade) };
 }
 
 interface MessageMeta {
@@ -688,39 +726,10 @@ function closeEvent(
   };
 }
 
-function hasResources(state: GameState, player: number, res: ResMap): boolean {
-  return RESOURCES.every((r) => state.players[player].resources[r] >= res[r]);
-}
-
-function tradeResourceSignature(state: GameState): string {
-  return state.players
-    .map((p) => RESOURCES.map((r) => p.resources[r]).join(','))
-    .join('|');
-}
-
-function cloneRes(res: ResMap): ResMap {
-  return { ...res };
-}
-
-function cloneOffer(offer: TradeOfferEvent): TradeOfferEvent {
-  return {
-    from: offer.from,
-    to: offer.to,
-    give: cloneRes(offer.give),
-    receive: cloneRes(offer.receive),
-  };
-}
-
 function pairKey(a: number, b: number): string {
   return a < b ? `${a}-${b}` : `${b}-${a}`;
 }
 
 function playerName(state: GameState, player: number): string {
   return playerDisplayName(state.players, player);
-}
-
-function resStr(m: ResMap): string {
-  return RESOURCES.filter((r) => m[r] > 0)
-    .map((r) => `${RESOURCE_LABEL[r]}×${m[r]}`)
-    .join(' ') || '无';
 }

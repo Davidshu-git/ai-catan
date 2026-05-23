@@ -178,6 +178,7 @@ LLM prompt / hint 里的骰点概率权重统一叫**产出点**，不要再写�
 | C → S | `set_ai_autoplay` | `{autoplay: boolean}` + ack | 开关服务端 AI 自动连续推进；关闭时取消排队中的 AI 步骤，并让进行中的 LLM 决策返回后失效 |
 | C → S | `set_ai_hint` | `{hint: boolean}` + ack | 切换是否在 LLM prompt 里塞空间动作 hint（A/B 实验用）；仅影响 llm provider，rule/mock 忽略；不作废进行中的决策 |
 | C → S | `set_ai_provider` | `{player?, provider}` + ack | 切换单个 AI 或全体 AI 的 provider（rule / mock / minimax / qwen36；前端按玩家独立切换）；`provider:'human'` 且带 `player` 时把该席位切为真人 |
+| C → S | `set_social_chat` | `{enabled: boolean}` + ack | 自由社交聊天（嘴炮/结盟/威胁）总开关；默认关，运行时实时熄火（生成中途被关即丢弃）；只管社交发言，关系账本不受影响 |
 | C → S | `step_ai` | ack | 手动推进一个 AI 动作；仅在当前有 AI 可行动且未 busy/queued 时成功 |
 | C → S | `human_trade_start` | `{give, receive, message?, participants?}` + ack | 真人发起多轮交互谈判，可仅喊话或带结构化报价 |
 | C → S | `human_trade_say` | `{message?, give?, receive?}` + ack | 真人继续喊话 / 改价，触发一轮 AI 回应 |
@@ -185,13 +186,22 @@ LLM prompt / hint 里的骰点概率权重统一叫**产出点**，不要再写�
 | C → S | `human_trade_end` | ack | 真人主动结束当前谈判 |
 | S → C | `ai_thought` | `AiThoughtEvent` | 一次 AI 决策的思考流（player/agentName/phase/thought/actionId/actionHint/action/modelContext/timing/provider/retries/status）；`action` 已通过 Maker-Checker，可用于前端棋盘高亮；`actionHint` 是最终选中动作的语义化情报；`modelContext` 展示完整模型输入 / Provider 输入；`timing` 展示服务端调用链路耗时 |
 | S → C | `ai_error` | `AiErrorEvent` | Provider 输出非法 / 调用失败时广播；重试过程的错误也会发，含 agentName；错误事件也可带 `modelContext` 与 `timing` 方便分析失败输入和耗时 |
-| S → C | `ai_control_state` | `AiControlState` | AI 控制状态（autoplay/queued/busy/canStep/hintEnabled/provider/currentAgent）；连接时与状态变化时广播 |
+| S → C | `ai_control_state` | `AiControlState` | AI 控制状态（autoplay/queued/busy/canStep/hintEnabled/socialChatEnabled/provider/currentAgent）；连接时与状态变化时广播 |
+| S → C | `social_chat` | `SocialChatEvent` | 一条 AI 社交发言（player/agentName/trigger/target/kind/message/turn）；由强盗/最长路/最大军队/逼近胜利等事件触发，受开关+预算约束；连接时补拉最近 60 条 |
+| S → C | `relationship_state` | `RelationshipSnapshotEvent` | 关系账本扁平快照（各玩家对彼此的 trust/threat/debt）；连接时与每次社交跃迁后广播，供观察者「社交房间」面板可视化 |
 | S → C | `human_trade_state` | `HumanTradeStateEvent` | 真人谈判实时态（当前报价、AI 接受/还价候选、发言限流、busy）；连接时与每次变化广播 |
 | S → C | `trade_chat_started` | `TradeChatStartedEvent` | 交易谈判开始（AI-only 或真人多轮谈判共用；initiator/participants/proposedTrade/limits） |
 | S → C | `trade_chat_message` | `TradeChatMessageEvent` | 谈判发言（PROPOSE / CHAT / ACCEPT / REJECT / COUNTER_OFFER / SYSTEM），可带结构化 offer |
 | S → C | `trade_chat_closed` | `TradeChatClosedEvent` | 谈判结束（accepted/rejected/expired/invalid），成交时带 finalTrade |
 
-`ai_thought` / `ai_error` / `ai_control_state` 与 `trade_chat_*` 的 DTO 定义在 `shared/protocol.ts`。server 端有最近 60 条 AI 事件环形 buffer 与最近 80 条交易谈判事件 buffer：新连接的客户端会在 `sync_state` 之后立即补拉历史事件。AI 自动推进默认关闭（`AI_AUTOPLAY=1` 可改默认开启），前端通过 AI 控制面板切换或单步推进。`PLAYER_MODE=human0` 可临时恢复 P0 人类 + 3 AI；默认 `all-ai`。
+`ai_thought` / `ai_error` / `ai_control_state` / `social_chat` / `relationship_state` 与 `trade_chat_*` 的 DTO 定义在 `shared/protocol.ts`。server 端有最近 60 条 AI 事件、80 条交易谈判事件、60 条社交发言环形 buffer：新连接的客户端会在 `sync_state` 之后立即补拉历史事件 + 关系账本快照。AI 自动推进默认关闭（`AI_AUTOPLAY=1` 可改默认开启），前端通过 AI 控制面板切换或单步推进。`PLAYER_MODE=human0` 可临时恢复 P0 人类 + 3 AI；默认 `all-ai`。
+
+**AI 社交房间（2026-05-23）。** 在交易/谈判之上叠了一层"社交"，详见 `docs/ai-social-room-design.md`：
+- **关系账本** `server/social/relationshipLedger.ts`：每个玩家对他人的 `{trust,threat,debt}`，由成交（互信）/强盗（嫌隙）/最长路·最大军队·逼近胜利（警惕）等事件**确定性更新（零 LLM）**，压成一句"你对各家的看法"注入交易 prompt，影响 AI 报价/接受倾向。纯服务端编排状态，不进 `shared/`。
+- **多轮房间式谈判**：`negotiationManager` 的 AI↔AI 谈判是多轮的（参与方互相反应、发起方对最优还价回应、竞争择优原子成交），`ROOM_ROUNDS_MAX` + `messagesPerSession` 双重封顶 LLM 调用。
+- **事件触发社交发言** `server/social/socialChat.ts` + `server/llm/socialProvider.ts`：白名单事件 + 规则门控 + 冷却 + 每回合/整局硬预算挑人发一句嘴炮/结盟/威胁。**默认关**（`SOCIAL_CHAT=1` 开），`set_social_chat` 运行时实时熄火，是防 token 失控的刹车。rule/mock 用模板兜底、LLM 走便宜模型。
+- **交易原语** `server/trading/roomCore.ts`：AI↔AI 与 人↔AI 两个驱动共用 `dryRunTrade`（资源守恒唯一入口）等原语，避免漂移。
+- 后端各模块都有专用冒烟（`ledgerSmoke` / `negotiationSmoke` / `socialChatSmoke`），因为 `sim.ts` 只跑 `shared/` 内核、触不到 server 社交层。
 
 新增事件时同步更新此表与 `server/index.ts` 的注释。
 

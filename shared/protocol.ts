@@ -154,6 +154,11 @@ export interface AiControlState {
   agentProviders: Record<number, string>;
   /** 各 AI 席位的角色策略提示词（即 LLM prompt 内 agent.personality 字段）；前端用作悬浮提示 */
   agentPersonalities: Record<number, string>;
+  /**
+   * 自由社交聊天（嘴炮/结盟/威胁）总开关。默认关；前端可通过 set_social_chat 实时熄火。
+   * 关闭时不触发任何社交 LLM 调用，是防 token 失控的实时刹车。关系账本（确定性、零 LLM）不受影响。
+   */
+  socialChatEnabled: boolean;
   currentAgent?: {
     player: number;
     name: string;
@@ -257,4 +262,49 @@ export interface HumanTradeStateEvent {
   messagesMax?: number;
   /** 服务端正在让 AI 逐个回应本轮喊话 / 报价，前端据此禁用输入 */
   busy?: boolean;
+}
+
+// ============================================================
+// 社交房间：事件触发的自由发言（嘴炮/结盟/威胁）+ 关系账本快照
+// 与交易谈判（trade_chat_*）是不同维度：社交不绑 session、不改游戏状态，纯旁路。
+// ============================================================
+
+export type SocialChatKind =
+  | 'taunt' // 嘲讽
+  | 'ally' // 拉拢结盟
+  | 'threat' // 威胁/警告
+  | 'gloat' // 炫耀/示威
+  | 'chat'; // 普通桌面闲聊
+
+/** 一条 AI 社交发言；由游戏事件（强盗/最长路/逼近胜利等）触发、受预算与开关约束 */
+export interface SocialChatEvent {
+  player: number;
+  agentName?: string;
+  /** 触发该发言的事件类型（robber / longest-road / largest-army / near-win） */
+  trigger: string;
+  /** 发言主要针对的对象（通常是触发事件的主角），前端可用于高亮 */
+  target?: number;
+  kind: SocialChatKind;
+  message: string;
+  turn: number;
+  phase: Phase;
+  /** 生成该发言的 provider（含模型名）；模板兜底为 'template' */
+  provider?: string;
+  /** LLM 生成时的输入快照；模板兜底无 */
+  modelContext?: AiModelContextEvent;
+  /** LLM 原始返回（解析前）；模板兜底无 */
+  rawOutput?: string;
+  ts: number;
+}
+
+/** 关系账本扁平快照，供观察者面板可视化（观察局全公开；未来隐私化推送再裁剪） */
+export interface RelationshipSnapshotEvent {
+  entries: Array<{
+    viewer: number;
+    target: number;
+    trust: number;
+    threat: number;
+    debt: number;
+  }>;
+  ts: number;
 }
