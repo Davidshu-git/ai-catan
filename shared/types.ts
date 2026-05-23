@@ -145,7 +145,7 @@ export interface GameState {
   /** AI 发给玩家、待玩家应答的交易 */
   pendingTrade: TradeOffer | null;
 
-  log: { text: string; turnMark?: boolean }[];
+  log: { text: string; turnMark?: boolean; player?: number }[];
   winner: number | null;
 }
 

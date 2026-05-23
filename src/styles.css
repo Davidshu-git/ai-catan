@@ -494,6 +494,17 @@ body {
   min-height: 15px;
 }
 
+.player-provider-tag {
+  font-size: 9px;
+  font-weight: 800;
+  color: var(--accent-d);
+  background: rgba(155, 63, 52, 0.12);
+  border: 1px solid rgba(155, 63, 52, 0.28);
+  border-radius: 3px;
+  padding: 0 4px;
+  line-height: 15px;
+}
+
 .player-resources {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
@@ -574,7 +585,7 @@ body {
 .btn.warn { background: var(--warn); border-color: #735a26; color: #2d2217; box-shadow: 3px 4px 0 #735a26; }
 
 .btn-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }
-.btn-grid.btn-grid-3 { grid-template-columns: repeat(3, 1fr); }
+.btn-grid.ai-controls-grid { grid-template-columns: repeat(3, 1fr); }
 .btn-grid .btn { width: 100%; }
 .build-actions {
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -617,33 +628,51 @@ select {
   transform: rotate(-1deg);
 }
 
+.player-ai-select-wrap {
+  position: relative;
+  display: inline-block;
+  width: 22px;
+}
+
 .player-ai-select {
   appearance: none;
   -webkit-appearance: none;
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.player-ai-select:disabled {
+  cursor: not-allowed;
+}
+
+.player-ai-label {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  padding: 1px 2px;
   font: inherit;
   font-size: 10px;
   font-weight: 800;
-  letter-spacing: 0;
-  min-width: 42px;
-  max-width: 52px;
-  padding: 1px 4px;
   text-align: center;
-  text-align-last: center;
   border-radius: 3px;
   border: 1px solid rgba(58, 44, 33, 0.5);
   background: var(--accent);
   color: var(--cream);
-  cursor: pointer;
   transition: background 0.15s, color 0.15s, border-color 0.15s;
+  user-select: none;
+  pointer-events: none;
 }
 
-.player-ai-select:hover:not(:disabled) {
+.player-ai-select-wrap:hover .player-ai-label {
   background: var(--accent-d);
 }
 
-.player-ai-select:disabled {
+.player-ai-select:disabled + .player-ai-label {
   opacity: 0.55;
-  cursor: not-allowed;
 }
 
 .dice-hud .die {
@@ -740,14 +769,25 @@ select {
   font-size: 12.5px;
   line-height: 1.55;
   color: var(--ink);
-  height: 100%;
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
+  gap: 6px;
+}
+
+.log-entry {
+  border-left: 3px solid var(--line);
+  background: rgba(216, 199, 158, 0.48);
+  padding: 6px 9px;
+  border-radius: 0 5px 5px 0;
+  color: var(--ink);
   font-weight: 700;
 }
 
-.log .turn-mark { color: var(--ink); font-weight: 800; margin-top: 6px; }
+.log-turn-mark {
+  color: var(--ink);
+  font-weight: 800;
+  margin-top: 6px;
+  padding: 2px 0;
+  border-bottom: 1px dashed rgba(58, 44, 33, 0.25);
+}
 
 /* ---- AI 思考流面板 ---- */
 .thought-log {
@@ -1566,6 +1606,16 @@ select {
   flex-direction: column;
   gap: 8px;
   overflow: hidden;
+}
+
+.room-toolbar {
+  flex: 0 0 auto;
+}
+
+.room-social-toggle {
+  width: 100%;
+  font-size: 12px;
+  padding: 8px 12px;
 }
 
 .rel-matrix {

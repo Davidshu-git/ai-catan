@@ -753,6 +753,8 @@ export function App() {
           socialItems={socialLog}
           relationships={relationships}
           game={game}
+          socialChatEnabled={aiControl.socialChatEnabled}
+          onToggleSocialChat={setSocialChat}
         />
         <AiControls
           control={aiControl}
@@ -761,7 +763,6 @@ export function App() {
           onAutoplay={setAiAutoplay}
           onStep={stepAi}
           onToggleHint={setAiHint}
-          onToggleSocialChat={setSocialChat}
         />
       </aside>
 
@@ -796,7 +797,6 @@ function AiControls({
   onAutoplay,
   onStep,
   onToggleHint,
-  onToggleSocialChat,
 }: {
   control: AiControlState;
   connected: boolean;
@@ -804,14 +804,13 @@ function AiControls({
   onAutoplay: (autoplay: boolean) => void;
   onStep: () => void;
   onToggleHint: (hint: boolean) => void;
-  onToggleSocialChat: (enabled: boolean) => void;
 }) {
   const waiting = control.queued || control.busy;
   const stepDisabled = stepTimer.running || !connected || control.autoplay || waiting || !control.canStep;
 
   return (
     <div className="card card-plain">
-      <div className="btn-grid btn-grid-3">
+      <div className="btn-grid ai-controls-grid">
         <button
           type="button"
           className={`btn${control.hintEnabled ? ' primary' : ''}`}
@@ -830,17 +829,6 @@ function AiControls({
         </button>
         <button className="btn" disabled={stepDisabled} onClick={onStep}>
           单步
-        </button>
-      </div>
-      <div className="btn-grid">
-        <button
-          type="button"
-          className={`btn${control.socialChatEnabled ? ' primary' : ''}`}
-          disabled={!connected}
-          onClick={() => onToggleSocialChat(!control.socialChatEnabled)}
-          title="自由社交聊天（嘴炮/结盟/威胁）总开关。默认关；开启会按事件触发额外 LLM 调用，token 一冒头可随时关。关系账本不受影响。"
-        >
-          {control.socialChatEnabled ? '社交聊天：开 🔥' : '社交聊天：关'}
         </button>
       </div>
     </div>
@@ -905,23 +893,25 @@ function Players({
               <div className="player-head">
                 <span className="player-dot" style={{ background: pl.color }} />
                 <span className="player-name">{playerDisplayName(state.players, pl.id)}</span>
-                <select
-                  className="player-ai-select"
-                  value={provider}
-                  disabled={!connected}
-                  onChange={(e) => onSetProvider(pl.id, e.target.value)}
-                  title="切换这个席位由真人或后端 AI 模型控制"
-                >
-                  <option value="human">真人</option>
-                  {(providerOptions.length > 0
-                    ? providerOptions
-                    : [{ key: 'rule', label: '规则 AI', available: true }]
-                  ).map((option) => (
-                    <option key={option.key} value={option.key} disabled={!option.available}>
-                      {providerShortLabel(option.key)}
-                    </option>
-                  ))}
-                </select>
+                <span className="player-ai-select-wrap" title="切换这个席位由真人或后端 AI 模型控制">
+                  <select
+                    className="player-ai-select"
+                    value={provider}
+                    disabled={!connected}
+                    onChange={(e) => onSetProvider(pl.id, e.target.value)}
+                  >
+                    <option value="human">真人</option>
+                    {(providerOptions.length > 0
+                      ? providerOptions
+                      : [{ key: 'rule', label: '规则 AI', available: true }]
+                    ).map((option) => (
+                      <option key={option.key} value={option.key} disabled={!option.available}>
+                        {providerShortLabel(option.key)}
+                      </option>
+                    ))}
+                  </select>
+                  <span className="player-ai-label" aria-hidden="true">脑</span>
+                </span>
               </div>
               <div className="player-stats">
                 <span className="player-stat-vp">
@@ -958,6 +948,11 @@ function Players({
                 ))}
               </div>
               <div className="player-badges">
+                {pl.isAI && (
+                  <span className="player-provider-tag">
+                    {providerShortLabel(agentProviders[pl.id])}
+                  </span>
+                )}
                 {state.current === pl.id && processingMs != null && (
                   <span className="player-time">
                     {(processingMs / 1000).toFixed(1)}秒
@@ -1786,6 +1781,8 @@ function InspectorPanel({
   socialItems,
   relationships,
   game,
+  socialChatEnabled,
+  onToggleSocialChat,
 }: {
   activeTab: InspectorTab;
   onTabChange: (tab: InspectorTab) => void;
@@ -1794,6 +1791,8 @@ function InspectorPanel({
   socialItems: SocialChatEvent[];
   relationships: RelationshipSnapshotEvent | null;
   game: FullGame;
+  socialChatEnabled: boolean;
+  onToggleSocialChat: (enabled: boolean) => void;
 }) {
   const { state } = game;
   const players = state.players;
@@ -1845,10 +1844,16 @@ function InspectorPanel({
           <TradeLogContent items={tradeItems} players={players} />
         )}
         {activeTab === 'room' && (
-          <RoomContent items={socialItems} relationships={relationships} players={players} />
+          <RoomContent
+            items={socialItems}
+            relationships={relationships}
+            players={players}
+            socialChatEnabled={socialChatEnabled}
+            onToggleSocialChat={onToggleSocialChat}
+          />
         )}
         {activeTab === 'log' && (
-          <LogContent state={state} />
+          <LogContent state={state} players={players} />
         )}
       </div>
     </div>
@@ -1869,14 +1874,28 @@ function RoomContent({
   items,
   relationships,
   players,
+  socialChatEnabled,
+  onToggleSocialChat,
 }: {
   items: SocialChatEvent[];
   relationships: RelationshipSnapshotEvent | null;
   players: FullGame['state']['players'];
+  socialChatEnabled: boolean;
+  onToggleSocialChat: (enabled: boolean) => void;
 }) {
   const reversed = [...items].slice(-60).reverse();
   return (
     <div className="room-tab">
+      <div className="room-toolbar">
+        <button
+          type="button"
+          className={`btn room-social-toggle${socialChatEnabled ? ' primary' : ''}`}
+          onClick={() => onToggleSocialChat(!socialChatEnabled)}
+          title="自由社交聊天（嘴炮/结盟/威胁）总开关。默认关；开启会按事件触发额外 LLM 调用，关系账本不受影响。"
+        >
+          社交{socialChatEnabled ? '：开' : '：关'}
+        </button>
+      </div>
       <RelationshipMatrix relationships={relationships} players={players} />
       <div className="room-social-stream event-feed">
         {reversed.length === 0 ? (
@@ -2258,17 +2277,30 @@ function TradeLogContent({
 
 // ---------- 日志 ----------
 
-function LogContent({ state }: { state: FullGame['state'] }) {
+function LogContent({
+  state,
+  players,
+}: {
+  state: FullGame['state'];
+  players: FullGame['state']['players'];
+}) {
   return (
     <div className="log event-feed">
       {state.log
         .slice(-60)
         .reverse()
-        .map((l, i) => (
-          <div key={i} className={l.turnMark ? 'turn-mark' : undefined}>
-            {l.text}
-          </div>
-        ))}
+        .map((l, i) => {
+          const color = l.player != null ? players[l.player]?.color : undefined;
+          return (
+            <div
+              key={i}
+              className={l.turnMark ? 'log-turn-mark' : 'log-entry'}
+              style={color ? { borderLeftColor: color } : undefined}
+            >
+              {l.text}
+            </div>
+          );
+        })}
     </div>
   );
 }
