@@ -52,7 +52,7 @@ function setupSettlements(b: Board, s: GameState): LegalAction[] {
       out.push({
         id: `setup-settlement-v${v.id}`,
         label: `在顶点 v${v.id} 放置初始房屋`,
-        hint: settlementHint(b, s, v.id),
+        hint: settlementHint(b, s, v.id, s.current),
         action: { type: 'PLACE_SETTLEMENT', v: v.id },
       });
     }
@@ -154,7 +154,7 @@ function mainActions(b: Board, s: GameState): LegalAction[] {
         out.push({
           id: `build-settlement-v${v.id}`,
           label: `建房屋在顶点 v${v.id}`,
-          hint: settlementHint(b, s, v.id),
+          hint: settlementHint(b, s, v.id, s.current),
           action: { type: 'BUILD_SETTLEMENT', v: v.id },
         });
       }
@@ -167,7 +167,7 @@ function mainActions(b: Board, s: GameState): LegalAction[] {
         out.push({
           id: `build-city-v${v.id}`,
           label: `升级城市在顶点 v${v.id}`,
-          hint: cityHint(b, v.id),
+          hint: cityHint(b, s, v.id, s.current),
           action: { type: 'BUILD_CITY', v: v.id },
         });
       }

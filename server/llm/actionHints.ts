@@ -8,8 +8,8 @@
 // 改 hint 文本时注意：会进入 LLM prompt 和 ai_thought 日志。
 // ============================================================
 
-import type { Board, GameState, Resource, Terrain } from '../../shared/types';
-import { pips as yieldPoints } from '../../shared/types';
+import type { Board, GameState, Resource, ResMap, Terrain } from '../../shared/types';
+import { emptyRes, pips as yieldPoints } from '../../shared/types';
 import { canBuildRoad, canBuildSettlement } from '../../shared/rules';
 
 /** 资源/地形显示顺序，便于 LLM 比较时稳定 */
@@ -103,6 +103,90 @@ function describeBuildTarget(b: Board, vertexId: number): string {
   return `v${vertexId}→${tiles} ${sum}产出点/${kinds}种${port}`;
 }
 
+/**
+ * 当前玩家现有建筑构成的"产出组合"：每种资源累计产出点（城市×2）。
+ * 关系性信息：把候选点和"你已经在产什么"做对比，是模型自己算不出的协同视角。
+ * 强盗压制是回合级临时状态，这里只看长期建筑组合，故不扣强盗。
+ */
+function playerProductionProfile(b: Board, s: GameState, player: number): ResMap {
+  const prof = emptyRes();
+  for (const [vStr, bld] of Object.entries(s.buildings)) {
+    if (bld.owner !== player) continue;
+    const v = b.vertices[Number(vStr)];
+    if (!v) continue;
+    const mult = bld.type === 'city' ? 2 : 1;
+    for (const hid of v.hexes) {
+      const h = b.hexes[hid];
+      if (h && h.terrain !== '沙漠' && h.number != null) {
+        prof[h.terrain as Resource] += yieldPoints(h.number) * mult;
+      }
+    }
+  }
+  return prof;
+}
+
+/**
+ * 候选顶点产出与玩家现有产出组合的对齐：
+ *  - "补你0产出的 X"：你当前完全不产的资源，建在此可补全资源多样性
+ *  - "叠加已有 Y"：你已在产、此处会进一步加厚的资源
+ * setup1 无建筑时全部算"补你0产出"，符合直觉（首点什么都缺）。
+ */
+function portfolioAlignText(b: Board, s: GameState, vertexId: number, player: number): string {
+  const v = b.vertices[vertexId];
+  if (!v) return '';
+  const prof = playerProductionProfile(b, s, player);
+  const seen = new Set<Resource>();
+  const fresh: Resource[] = [];
+  const stack: Resource[] = [];
+  for (const hid of v.hexes) {
+    const h = b.hexes[hid];
+    if (!h || h.terrain === '沙漠' || h.number == null) continue;
+    const r = h.terrain as Resource;
+    if (seen.has(r)) continue;
+    seen.add(r);
+    if (prof[r] === 0) fresh.push(r);
+    else stack.push(r);
+  }
+  const parts: string[] = [];
+  if (fresh.length > 0) parts.push(`补你0产出的 ${fresh.join('')}`);
+  if (stack.length > 0) parts.push(`叠加已有 ${stack.join('')}`);
+  return parts.length > 0 ? `；产出组合：${parts.join('、')}` : '';
+}
+
+/** 与某顶点"共享地块"的对手（同一 hex 上已有对手建筑），按 id 升序去重 */
+function contestedOpponents(b: Board, s: GameState, vertexId: number, player: number): number[] {
+  const v = b.vertices[vertexId];
+  if (!v) return [];
+  const opp = new Set<number>();
+  for (const hid of v.hexes) {
+    const h = b.hexes[hid];
+    if (!h) continue;
+    for (const c of h.corners) {
+      const bld = s.buildings[c];
+      if (bld && bld.owner !== player) opp.add(bld.owner);
+    }
+  }
+  return [...opp].sort((a, c) => a - c);
+}
+
+/** 城市加倍的资源在你当前产出组合中的丰寡（边际价值参考） */
+function cityDoubleScarcityText(b: Board, s: GameState, vertexId: number, player: number): string {
+  const v = b.vertices[vertexId];
+  if (!v) return '';
+  const prof = playerProductionProfile(b, s, player);
+  const seen = new Set<Resource>();
+  const parts: string[] = [];
+  for (const hid of v.hexes) {
+    const h = b.hexes[hid];
+    if (!h || h.terrain === '沙漠' || h.number == null) continue;
+    const r = h.terrain as Resource;
+    if (seen.has(r)) continue;
+    seen.add(r);
+    parts.push(`${r}(现${prof[r]}产出点)`);
+  }
+  return parts.length > 0 ? `；加倍 ${parts.join(' ')}` : '';
+}
+
 /** 顶点周边 hex 短标签，用于道路端点压缩描述："麦8,矿6,木3" */
 function vertexTilesShort(b: Board, vertexId: number): string {
   const v = b.vertices[vertexId];
@@ -134,21 +218,28 @@ function buildingAt(s: GameState, vertexId: number): { owner: number; type: 'set
 
 // ---------- 对外 API ----------
 
-/** 建/初始放房屋的 hint：周围 hex 摘要 + 港口 + 产出点总分 */
-export function settlementHint(b: Board, s: GameState, vertexId: number): string {
+/**
+ * 建/初始放房屋的 hint：周围 hex 摘要 + 港口 + 产出点总分
+ * + 产出组合对齐（补缺/叠加）+ 与对手共享地块的争产/卡位关系（关系性信息，模型自己算不出）。
+ */
+export function settlementHint(b: Board, s: GameState, vertexId: number, player: number): string {
   const tiles = describeVertexTiles(b, vertexId);
   const sum = vertexYieldPointSum(b, vertexId);
   const kinds = vertexResourceKinds(b, vertexId).size;
   const port = portText(b, vertexId);
   const distance = distanceRuleText(b, s, vertexId);
-  return `周边 ${tiles}；总产出 ${sum}产出点；${kinds} 种资源${port}${distance}`;
+  const align = portfolioAlignText(b, s, vertexId, player);
+  const opp = contestedOpponents(b, s, vertexId, player);
+  const contested = opp.length > 0 ? `；与 ${opp.map((o) => `P${o}`).join('、')} 共享地块(争产/卡位)` : '';
+  return `周边 ${tiles}；总产出 ${sum}产出点；${kinds} 种资源${port}${distance}${align}${contested}`;
 }
 
-/** 升级城市的 hint：同 vertexHint，但加"产出翻倍"提示 */
-export function cityHint(b: Board, vertexId: number): string {
+/** 升级城市的 hint：产出翻倍 + 加倍资源在你产出组合中的丰寡（边际价值参考） */
+export function cityHint(b: Board, s: GameState, vertexId: number, player: number): string {
   const tiles = describeVertexTiles(b, vertexId);
   const sum = vertexYieldPointSum(b, vertexId);
-  return `升级后产出翻倍：周边 ${tiles}；翻倍后 ${sum * 2}产出点`;
+  const scarcity = cityDoubleScarcityText(b, s, vertexId, player);
+  return `升级后产出翻倍：周边 ${tiles}；翻倍后 ${sum * 2}产出点${scarcity}`;
 }
 
 /**
@@ -205,12 +296,18 @@ export function roadHint(b: Board, s: GameState, edgeId: number, currentPlayer: 
         : `v${vid} 暂不能建`;
     });
 
+  const contestOpp = new Set<number>();
+  for (const vid of frontierEnds) for (const o of contestedOpponents(b, s, vid, currentPlayer)) contestOpp.add(o);
+
   const parts = [];
   parts.push(`路端 ${frontierEnds.map((vid) => `v${vid}`).join('、')}`);
   if (blockedFrontier.length > 0) parts.push(blockedFrontier.join('；'));
   if (immediate.length > 0) parts.push(`修完即可建：${immediate.join('；')}`);
   if (oneMore.size > 0) parts.push(`隔点候选：${[...oneMore.values()].join('；')}`);
   if (immediate.length === 0 && oneMore.size === 0) parts.push('暂未打开可建房屋位，仅延长路网/争最长路');
+  if (contestOpp.size > 0) {
+    parts.push(`卡位：路端与 ${[...contestOpp].sort((a, c) => a - c).map((o) => `P${o}`).join('、')} 共享地块`);
+  }
   return parts.join('；');
 }
 
