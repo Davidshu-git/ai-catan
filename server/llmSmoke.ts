@@ -49,6 +49,7 @@ const view: PlayerView = {
     vpCards: 0,
     publicVP: 2,
     totalVP: 2,
+    longestRoadLen: 0,
     tradeRatio: { 木: 4, 砖: 4, 羊: 4, 麦: 4, 矿: 4 },
   },
   others: [],

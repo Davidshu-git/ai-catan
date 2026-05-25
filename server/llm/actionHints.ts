@@ -10,7 +10,7 @@
 
 import type { Board, GameState, Resource, ResMap, Terrain } from '../../shared/types';
 import { emptyRes, pips as yieldPoints } from '../../shared/types';
-import { canBuildRoad, canBuildSettlement } from '../../shared/rules';
+import { canBuildRoad, canBuildSettlement, longestRoadLength } from '../../shared/rules';
 
 /** 资源/地形显示顺序，便于 LLM 比较时稳定 */
 const TERRAIN_ORDER: Terrain[] = ['麦', '矿', '木', '砖', '羊', '沙漠'];
@@ -243,9 +243,36 @@ export function cityHint(b: Board, s: GameState, vertexId: number, player: numbe
 }
 
 /**
+ * 最长路延伸推演：dry-run 加上这条路后重算玩家最长连续路，给出 cur→next 的边际增长，
+ * 并结合当前持有者判断是否跨过"抢/守 2 分"临界。模型自己做不准这种图遍历，故由引擎预算。
+ * - setup 阶段路被迫贴着初始房屋放、与最长路无关，返回空串
+ * - advisory：基于 s.longestRoad 官方持有者口径，最终以 reducer 为准
+ */
+function longestRoadDeltaText(b: Board, s: GameState, edgeId: number, player: number): string {
+  if (s.phase === 'setup1' || s.phase === 'setup2') return '';
+  const cur = longestRoadLength(b, s, player);
+  const next = longestRoadLength(b, stateWithRoad(s, edgeId, player), player);
+  if (next <= cur) return `最长路：${cur} 段（本路不增长）`;
+
+  const holder = s.longestRoad.player;
+  const holderLen = s.longestRoad.len;
+  if (holder === player) return `最长路：你 ${cur}→${next} 段（持有中，巩固）`;
+
+  const baseline = holder === null ? 4 : holderLen;
+  const needed = Math.max(5, baseline + 1);
+  if (next >= needed) {
+    const over = holder === null ? '暂无人持有，达标即得' : `超过 P${holder}(${holderLen}段)`;
+    return `最长路：你 ${cur}→${next} 段，修完抢到最长路+2分（${over}）`;
+  }
+  const holderDesc = holder === null ? '暂无人持有' : `P${holder} 持有(${holderLen}段)`;
+  return `最长路：你 ${cur}→${next} 段（${holderDesc}，需 ${needed} 段才抢到）`;
+}
+
+/**
  * 建/初始放路的 hint：
  *  - 不把道路端点的资源误当成收益：端点若紧邻已有建筑，受距离规则约束不能建房
  *  - 模拟修完此路后的可建点；若端点不可建，再看从该端点继续一条路后的隔点候选
+ *  - 最长路延伸推演：本路对自己最长连续路的边际增长 + 抢/守 2 分临界
  */
 export function roadHint(b: Board, s: GameState, edgeId: number, currentPlayer: number): string {
   const e = b.edges[edgeId];
@@ -267,7 +294,8 @@ export function roadHint(b: Board, s: GameState, edgeId: number, currentPlayer: 
         return `v${vid}(${owner}${b1.type === 'city' ? '城' : '房'})`;
       })
       .join(' ↔ ');
-    return `两端均已饱和：${detail}；仅延长路网长度`;
+    const lr = longestRoadDeltaText(b, s, edgeId, currentPlayer);
+    return `两端均已饱和：${detail}；仅延长路网长度${lr ? '；' + lr : ''}`;
   }
 
   const immediate = frontierEnds
@@ -308,6 +336,8 @@ export function roadHint(b: Board, s: GameState, edgeId: number, currentPlayer: 
   if (contestOpp.size > 0) {
     parts.push(`卡位：路端与 ${[...contestOpp].sort((a, c) => a - c).map((o) => `P${o}`).join('、')} 共享地块`);
   }
+  const lr = longestRoadDeltaText(b, s, edgeId, currentPlayer);
+  if (lr) parts.push(lr);
   return parts.join('；');
 }
 

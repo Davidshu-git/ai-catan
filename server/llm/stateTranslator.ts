@@ -37,6 +37,8 @@ export interface SelfPlayerView {
   vpCards: number;
   publicVP: number;
   totalVP: number;
+  /** 自己当前最长连续路长度（与 others[].longestRoadLen 口径一致） */
+  longestRoadLen: number;
   /** 港口 2:1 资源比率（按资源） */
   tradeRatio: Record<Resource, number>;
 }
@@ -183,6 +185,7 @@ export function buildPlayerView(b: Board, s: GameState, me: number): PlayerView 
       publicVP: publicVP(s, me),
       // 仅自己能看到 totalVP（含隐藏胜利点卡）
       totalVP: publicVP(s, me) + self.vpCards,
+      longestRoadLen: longestRoadLength(b, s, me),
       tradeRatio: ratio,
     },
     others: s.players
