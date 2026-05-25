@@ -63,8 +63,9 @@ server/                ← Node + socket.io 后端，持有上帝视角状态、
     actionChecker.ts   三层校验：JSON schema → 白名单 actionId → dry-run reducer 状态指纹
     ruleProvider.ts    包 aiNextAction → 反查 actionId；同时充当 LLM 失败的兜底 Provider
     mockProvider.ts    按优先级（建城 > 房屋 > 路 > 买卡 > 银行兑换 > 发展卡 > END_TURN）选 actionId
-    llmProvider.ts     调 MiniMax Anthropic 兼容端点；裸 fetch + JSON 严格输出 + 多策略解析
-    qwenProvider.ts    调阿里 Qwen OpenAI-compatible 端点（qwen3.6-plus 默认）
+    modelRegistry.ts   LLM 模型注册表（单一事实来源）：key/label/api 形态/model/endpoint/apiKeyEnv/别名；buildProvider、callLlm、前端选项、别名归一全从此派生。加/停模型只动这里
+    llmProvider.ts     anthropic 兼容 adapter（裸 fetch + JSON 严格输出 + 多策略解析）。原 MiniMax 用；MiniMax 已退役但 adapter 保留给后续 anthropic 形态模型
+    qwenProvider.ts    openai 兼容 adapter；阿里 Qwen（qwen3.6-plus 默认，当前默认 LLM）
     controller.ts      decideAiStep：编排 catalog → view → provider → check → apply，含重试 + fallback
   llmSmoke.ts          单次 LLM 调用冒烟（不走游戏循环，仅验证 API 链路）
   Dockerfile           生产镜像（node:20-alpine + tsx 直跑 TS）
@@ -135,10 +136,12 @@ LLM prompt / hint 里的骰点概率权重统一叫**产出点**，不要再写�
 **AI 驱动循环在 `server/index.ts` 的 `scheduleAI()` → `decideAiStep()`（在 `server/llm/controller.ts`）。** 当前默认 `PLAYER_MODE=all-ai`：server 创建新局后把 4 个席位都设为 AI，并在 `Session.agents` 里为 P0/P1/P2/P3 各建一个独立 `AiAgentRuntime`（性格、短期记忆、providerName、decisionCount）。流程：①按当前玩家取对应 agent → ②生成 legalActions（actionCatalog）+ playerView（stateTranslator）+ agent personality/memory → ③喂给 `AiDecisionProvider`（由 agent.providerName 初始化自 `AI_PROVIDER`，可按玩家拆分）→ ④用 `actionChecker` 三层校验 → ⑤校验过则 apply 新状态 + 广播 `ai_thought`，并把 thought/action 写回该 agent 的 memory；不过则带反馈重试最多 2 次 → ⑥仍不过 fallback 到 ruleProvider；最终极端兜底强制 `END_TURN`。**discard 阶段不喂 Provider**：组合爆炸，直接走规则 AI 兜底。**含状态指纹防卡死兜底**：连续 8 次同指纹则强制 `END_TURN`（sim.ts 用同样指纹、阈值 600）。**改 AI 的铁律：`aiMain` 必须始终推进或最终 `END_TURN`，绝不能持续返回一个会被 reducer no-op 的动作。**
 
 **Provider 抽象（重要）：**
+- **模型注册表 `llm/modelRegistry.ts` 是 LLM 模型的单一事实来源。** 每个模型一条 `LlmModelSpec`：`key` / `label` / `api`（`anthropic`|`openai`，决定走哪个 adapter）/ `model` / `endpoint` / `apiKeyEnv` / `aliases` / `enableThinking`。`buildProvider`（决策）、`tradeProvider.callLlm`（交易/社交）、前端 provider 选项（`llmModelOptions`）、别名归一（`resolveProviderKey`）、`isLlmProvider` 全部从这里派生。**加模型 = 加一条（复用现有 adapter，新 API 形态才写 adapter）；停模型 = 删/注释该条。** rule/mock 是内置非 LLM provider，不在表里。
 - `rule` Provider：包 `aiNextAction`，把动作 deep-equal 反查到 `legalActions` 中的 actionId。
 - `mock` Provider：按优先级从 legalActions 里挑，不接 LLM 也能跑通整条链路；用于压测和无 API 调试。
-- `minimax` Provider（兼容旧值 `llm`）：调 **MiniMax-M2.7** 的 Anthropic 兼容端点（`https://api.minimaxi.com/anthropic/v1/messages`），裸 fetch（不依赖 SDK 以避兼容性麻烦）。`AbortController` 控 30-45s 超时；失败/超时由 controller 重试 + fallback 到 rule。**缺 `MINIMAX_API_KEY` 时自动降级到 rule 并打 warn**，stack 不会因此挂。
-- `qwen36` Provider：调阿里 `qwen3.6-plus`，默认 OpenAI-compatible 端点 `https://coding.dashscope.aliyuncs.com/v1/chat/completions`，读取 `ALI_CODING_PLAN_KEY`。前端玩家卡片上可按 AI 席位独立切换 provider；底部控制区只保留自动/单步/hint，不做全局模型切换。
+- `qwen36` Provider（**当前默认 LLM**）：openai 兼容 adapter（`qwenProvider.ts`），调阿里 `qwen3.6-plus`，端点 `https://coding.dashscope.aliyuncs.com/v1/chat/completions`，读取 `ALI_CODING_PLAN_KEY`。前端玩家卡片上可按 AI 席位独立切换 provider。
+- `minimax` Provider（anthropic 兼容 adapter `llmProvider.ts`）：**已退役（订阅失效，2026-05-25），从注册表移除**——`AI_PROVIDER=minimax`/`llm` 现归一到 `rule`。adapter 代码保留；重启用见 `modelRegistry.ts` 里注释掉的那条 + `.env.example`。
+- 任何 LLM 缺对应 `apiKeyEnv` 时 `buildProvider` 自动降级到 rule 并打 warn，stack 不会因此挂。
 - LLM 不直接生成 `Action`，**永远是从 server 生成的 `legalActions` 里挑 `actionId`**。这是降低乱编坐标 / 破坏状态机风险的关键设计，新增 Provider 时不要绕过这条约束。
 
 **LLM 输入与诊断可视化（2026-05-21，提交 `f69c0c1`）。** `AiThoughtEvent` / `AiErrorEvent` 现在可携带 `modelContext` 与 `timing`：前端 `AI 思考流` 每条新事件下方会显示可折叠的“模型输入 / Provider 输入”和“时延”面板。真实 LLM 显示实际发送的 `system` + `user` prompt；rule/mock 显示结构化 provider input。`timing` 会拆出 queue / catalog / view / context / provider / checker / fallback / commit 等阶段，用来定位慢点。旧历史事件没有这些字段是正常的。
@@ -182,7 +185,7 @@ LLM prompt / hint 里的骰点概率权重统一叫**产出点**，不要再写�
 | C → S | `new_game` | —— | 清掉当前 session，重开一局，广播 |
 | C → S | `set_ai_autoplay` | `{autoplay: boolean}` + ack | 开关服务端 AI 自动连续推进；关闭时取消排队中的 AI 步骤，并让进行中的 LLM 决策返回后失效 |
 | C → S | `set_ai_hint` | `{hint: boolean}` + ack | 切换是否在 LLM prompt 里塞空间动作 hint（A/B 实验用）；仅影响 llm provider，rule/mock 忽略；不作废进行中的决策 |
-| C → S | `set_ai_provider` | `{player?, provider}` + ack | 切换单个 AI 或全体 AI 的 provider（rule / mock / minimax / qwen36；前端按玩家独立切换）；`provider:'human'` 且带 `player` 时把该席位切为真人 |
+| C → S | `set_ai_provider` | `{player?, provider}` + ack | 切换单个 AI 或全体 AI 的 provider（rule / mock / 注册表里的模型 key，当前 = qwen36；前端按玩家独立切换）；`provider:'human'` 且带 `player` 时把该席位切为真人 |
 | C → S | `set_social_chat` | `{enabled: boolean}` + ack | 自由社交聊天（嘴炮/结盟/威胁）总开关；默认关，运行时实时熄火（生成中途被关即丢弃）；只管社交发言，关系账本不受影响 |
 | C → S | `step_ai` | ack | 手动推进一个 AI 动作；仅在当前有 AI 可行动且未 busy/queued 时成功 |
 | C → S | `human_trade_start` | `{give, receive, message?, participants?}` + ack | 真人发起多轮交互谈判，可仅喊话或带结构化报价 |
@@ -234,7 +237,7 @@ docker run --rm -v "$PWD":/app -w /app node:20-alpine npx --yes tsx server/persi
 **LLM Provider 验证（不入 sim，避免烧 token）：**
 
 ```bash
-# 单次 API 调用冒烟（伪造 view + 3 个 legalActions，验证 MiniMax 能返回合法 JSON）
+# 单次 API 调用冒烟（伪造 view + 3 个 legalActions，验证默认 LLM=qwen36 能返回合法 JSON）
 docker run --rm --env-file .env -v "$PWD":/app -w /app node:20-alpine \
   sh -c "npm install --no-fund --no-audit --silent && npx tsx server/llmSmoke.ts"
 
@@ -248,11 +251,11 @@ docker run --rm --network catan_default --env-file .env -e SMOKE_DRIVE=1 \
 
 ## API Key 与 .env
 
-`AI_PROVIDER=minimax`（兼容旧值 `llm`）需要 `MINIMAX_API_KEY`；`AI_PROVIDER=qwen36` 需要 `ALI_CODING_PLAN_KEY`。这些从 `.env` 注入到 `catan-server` 容器（`docker-compose.yml` 配置了 `env_file: .env`，required: false 所以缺文件也能起）。
+默认 LLM 是 `AI_PROVIDER=qwen36`，需要 `ALI_CODING_PLAN_KEY`。模型清单与各自所需的 key（`apiKeyEnv`）在 `server/llm/modelRegistry.ts`。这些从 `.env` 注入到 `catan-server` 容器（`docker-compose.yml` 配置了 `env_file: .env`，required: false 所以缺文件也能起）。MiniMax 已退役（订阅失效），`AI_PROVIDER=minimax`/`llm` 现归一到 `rule`；重启用见 `modelRegistry.ts` 注释条 + `.env.example`。
 
-- **新机器 setup**：`cp .env.example .env`，按需填 `MINIMAX_API_KEY` 或 `ALI_CODING_PLAN_KEY`；`.env` 已在 `.gitignore`
-- **常用环境变量**：见 `.env.example`，含 `AI_PROVIDER` / `MINIMAX_API_HOST`（CN 用 `api.minimaxi.com`、国际 `api.minimax.io`）/ `LLM_MODEL` / `ALI_CODING_PLAN_BASE_URL` / `QWEN_MODEL` / `PERSIST` / `TRACE_FILE` / `TRACE_HTTP` / `LLM_TIMEOUT_MS` / `LLM_TEMPERATURE`
-- **快速降级**：把 `.env` 里改成 `AI_PROVIDER=rule` 或干脆删 `MINIMAX_API_KEY`，stack 会自动用规则 AI（log 里会看到 warn）
+- **新机器 setup**：`cp .env.example .env`，填 `ALI_CODING_PLAN_KEY`；`.env` 已在 `.gitignore`
+- **常用环境变量**：见 `.env.example`，含 `AI_PROVIDER` / `ALI_CODING_PLAN_BASE_URL` / `QWEN_MODEL` / `PERSIST` / `TRACE_FILE` / `TRACE_HTTP` / `LLM_TIMEOUT_MS` / `LLM_TEMPERATURE`
+- **快速降级**：把 `.env` 里改成 `AI_PROVIDER=rule` 或干脆删 `ALI_CODING_PLAN_KEY`，stack 会自动用规则 AI（log 里会看到 warn）
 
 ## Art / 美术风格
 

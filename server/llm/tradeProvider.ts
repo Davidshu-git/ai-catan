@@ -19,19 +19,10 @@ import type {
   AiModelContextEvent,
 } from '../../shared/protocol';
 import type { AgentPromptContext } from './types';
+import { findModel, isLlmProvider, providerLabel } from './modelRegistry';
 
-const MINIMAX_HOST = process.env.MINIMAX_API_HOST ?? 'api.minimaxi.com';
-const MINIMAX_API_KEY = process.env.MINIMAX_API_KEY ?? '';
-const MINIMAX_MODEL = process.env.LLM_MODEL ?? 'MiniMax-M2.7';
-const MINIMAX_ENABLE_THINKING = process.env.MINIMAX_ENABLE_THINKING === '1';
-
-const QWEN_BASE_URL =
-  process.env.ALI_CODING_PLAN_BASE_URL ??
-  process.env.QWEN_BASE_URL ??
-  'https://coding.dashscope.aliyuncs.com/v1';
-const QWEN_API_KEY = process.env.ALI_CODING_PLAN_KEY ?? '';
-const QWEN_MODEL = process.env.QWEN_MODEL ?? process.env.ALI_QWEN_MODEL ?? 'qwen3.6-plus';
-const QWEN_ENABLE_THINKING = process.env.QWEN_ENABLE_THINKING === '1';
+// socialProvider 仍从本模块 import { providerLabel, isLlmProvider }，故把注册表的实现再导出
+export { providerLabel, isLlmProvider };
 
 const TRADE_TIMEOUT_MS = Number(
   process.env.TRADE_LLM_TIMEOUT_MS ?? process.env.LLM_TIMEOUT_MS ?? 20_000,
@@ -461,32 +452,36 @@ function buildInitiateUserMessage(input: TradeInitiationInput, feedback?: string
 // ---------- LLM 调用 ----------
 
 export async function callLlm(providerName: string, system: string, user: string): Promise<string> {
+  const spec = findModel(providerName);
+  if (!spec) throw new Error(`未知 LLM provider：${providerName}`);
+  const apiKey = process.env[spec.apiKeyEnv] ?? '';
+
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), TRADE_TIMEOUT_MS);
 
   try {
-    if (providerName === 'minimax') {
-      const resp = await fetch(`https://${MINIMAX_HOST}/anthropic/v1/messages`, {
+    if (spec.api === 'anthropic') {
+      const resp = await fetch(`https://${spec.endpoint}/anthropic/v1/messages`, {
         method: 'POST',
         signal: ctl.signal,
         headers: {
           'Content-Type': 'application/json',
-          'x-api-key': MINIMAX_API_KEY,
-          Authorization: `Bearer ${MINIMAX_API_KEY}`,
+          'x-api-key': apiKey,
+          Authorization: `Bearer ${apiKey}`,
           'anthropic-version': '2023-06-01',
         },
         body: JSON.stringify({
-          model: MINIMAX_MODEL,
+          model: spec.model,
           max_tokens: 256,
           temperature: TRADE_TEMPERATURE,
           system,
           messages: [{ role: 'user', content: user }],
-          ...(MINIMAX_ENABLE_THINKING ? {} : { thinking: { type: 'disabled' } }),
+          ...(spec.enableThinking ? {} : { thinking: { type: 'disabled' } }),
         }),
       });
       if (!resp.ok) {
         const body = await resp.text().catch(() => '');
-        throw new Error(`MiniMax trade HTTP ${resp.status}: ${body.slice(0, 200)}`);
+        throw new Error(`${spec.label} trade HTTP ${resp.status}: ${body.slice(0, 200)}`);
       }
       const json = (await resp.json()) as {
         content?: Array<{ type: string; text?: string }>;
@@ -495,30 +490,30 @@ export async function callLlm(providerName: string, system: string, user: string
         .filter((b) => b.type === 'text' && b.text)
         .map((b) => b.text!)
         .join('');
-      if (!text) throw new Error('MiniMax trade 无 text 块');
+      if (!text) throw new Error(`${spec.label} trade 无 text 块`);
       return text;
     }
 
-    // qwen36
-    const url = `${QWEN_BASE_URL.replace(/\/+$/, '')}/chat/completions`;
+    // openai 兼容（qwen 等）
+    const url = `${spec.endpoint.replace(/\/+$/, '')}/chat/completions`;
     const resp = await fetch(url, {
       method: 'POST',
       signal: ctl.signal,
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${QWEN_API_KEY}` },
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
       body: JSON.stringify({
-        model: QWEN_MODEL,
+        model: spec.model,
         messages: [
           { role: 'system', content: system },
           { role: 'user', content: user },
         ],
         max_tokens: 256,
         temperature: TRADE_TEMPERATURE,
-        enable_thinking: QWEN_ENABLE_THINKING,
+        enable_thinking: spec.enableThinking,
       }),
     });
     if (!resp.ok) {
       const body = await resp.text().catch(() => '');
-      throw new Error(`Qwen trade HTTP ${resp.status}: ${body.slice(0, 200)}`);
+      throw new Error(`${spec.label} trade HTTP ${resp.status}: ${body.slice(0, 200)}`);
     }
     const json = (await resp.json()) as {
       choices?: Array<{
@@ -532,7 +527,7 @@ export async function callLlm(providerName: string, system: string, user: string
         : Array.isArray(content)
           ? content.map((b) => b.text ?? '').join('')
           : '';
-    if (!text) throw new Error('Qwen trade 无内容');
+    if (!text) throw new Error(`${spec.label} trade 无内容`);
     return text;
   } catch (err) {
     if ((err as Error).name === 'AbortError')
@@ -646,21 +641,12 @@ function buildTradeModelContext(
   };
 }
 
-/** 给前端展示用的 provider 标签（含模型 ID） */
-export function providerLabel(providerName: string): string {
-  if (providerName === 'minimax')
-    return `minimax(${process.env.LLM_MODEL ?? 'MiniMax-M2.7'})`;
-  if (providerName === 'qwen36')
-    return `qwen(${process.env.QWEN_MODEL ?? process.env.ALI_QWEN_MODEL ?? 'qwen3.6-plus'})`;
-  return providerName;
-}
-
 /** 参与方回应报价：返回 ACCEPT / REJECT / COUNTER_OFFER + message */
 export async function decideTradeResponse(
   input: TradeResponseInput,
   providerName: string,
 ): Promise<TradeResponseOutput> {
-  const isLlm = providerName === 'minimax' || providerName === 'qwen36';
+  const isLlm = isLlmProvider(providerName);
   if (!isLlm) return ruleTradeResponse(input);
 
   const user = buildRespondUserMessage(input);
@@ -717,7 +703,7 @@ export async function decideTradeChatResponse(
   input: TradeChatInput,
   providerName: string,
 ): Promise<TradeChatOutput> {
-  const isLlm = providerName === 'minimax' || providerName === 'qwen36';
+  const isLlm = isLlmProvider(providerName);
   if (!isLlm) return ruleTradeChatResponse(input);
 
   const user = buildChatUserMessage(input);
@@ -756,7 +742,7 @@ export async function decideTradeInitiation(
   providerName: string,
   feedback?: string,
 ): Promise<TradeInitiationOutput> {
-  const isLlm = providerName === 'minimax' || providerName === 'qwen36';
+  const isLlm = isLlmProvider(providerName);
   if (!isLlm) return { initiate: false, give: emptyRes(), receive: emptyRes() };
 
   const user = buildInitiateUserMessage(input, feedback);
@@ -796,7 +782,7 @@ export async function generateProposeMessage(
   providerName: string,
   fallbackMessage: string,
 ): Promise<TradeProposeOutput> {
-  const isLlm = providerName === 'minimax' || providerName === 'qwen36';
+  const isLlm = isLlmProvider(providerName);
   if (!isLlm) return { message: fallbackMessage };
 
   const user = buildProposeUserMessage(input);

@@ -247,10 +247,10 @@ function readStoredSidebarWidth(): number {
 
 function normalizeProviderKey(provider: string | undefined): string {
   const p = (provider ?? '').toLowerCase();
-  if (p === 'llm' || p.startsWith('llm(') || p === 'minimax') return 'minimax';
   if (p === 'qwen' || p === 'qwen36' || p.startsWith('qwen(')) return 'qwen36';
   if (p === 'mock') return 'mock';
   if (p === 'rule') return 'rule';
+  if (p === 'human') return 'human';
   return p || 'rule';
 }
 
@@ -258,8 +258,6 @@ function providerShortLabel(provider: string | undefined): string {
   switch (normalizeProviderKey(provider)) {
     case 'human':
       return '真人';
-    case 'minimax':
-      return 'mini';
     case 'qwen36':
       return 'qwen';
     case 'mock':

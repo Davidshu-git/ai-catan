@@ -8,7 +8,7 @@
 import type { AiModelContextEvent, SocialChatKind } from '../../shared/protocol';
 import { playerDisplayName } from '../../shared/state';
 import type { GameState } from '../../shared/types';
-import { callLlm, extractJson, providerLabel } from './tradeProvider';
+import { callLlm, extractJson, providerLabel, isLlmProvider } from './tradeProvider';
 import type { AgentPromptContext } from './types';
 
 export interface SocialLineInput {
@@ -58,7 +58,7 @@ export async function generateSocialLine(
   input: SocialLineInput,
   providerName: string,
 ): Promise<SocialLineOutput> {
-  const isLlm = providerName === 'minimax' || providerName === 'qwen36';
+  const isLlm = isLlmProvider(providerName);
   if (!isLlm) return templateLine(input);
 
   const speakerName = playerDisplayName(input.state.players, input.speaker);

@@ -40,6 +40,7 @@ import { createRuleProvider } from './llm/ruleProvider';
 import { createMockProvider } from './llm/mockProvider';
 import { createLlmProvider } from './llm/llmProvider';
 import { createQwenProvider } from './llm/qwenProvider';
+import { resolveProviderKey, findModel, llmModelOptions } from './llm/modelRegistry';
 import { decideAiStep } from './llm/controller';
 import {
   createAgentRuntimes,
@@ -108,48 +109,22 @@ const AI_EVENT_BUFFER = 60; // 每房间缓存最近 N 条 AI 事件，用于断
 const TRADE_EVENT_BUFFER = 80; // 每房间缓存最近 N 条交易谈判事件
 const SOCIAL_EVENT_BUFFER = 60; // 每房间缓存最近 N 条社交发言，用于断线后补拉
 const DEFAULT_ROOM = 'default'; // MVP：单房间
-const MINIMAX_MODEL = process.env.LLM_MODEL ?? 'MiniMax-M2.7';
-const QWEN_MODEL = process.env.QWEN_MODEL ?? process.env.ALI_QWEN_MODEL ?? 'qwen3.6-plus';
-const QWEN_BASE_URL =
-  process.env.ALI_CODING_PLAN_BASE_URL ??
-  process.env.QWEN_BASE_URL ??
-  'https://coding.dashscope.aliyuncs.com/v1';
-const AI_PROVIDER = normalizeProviderName(process.env.AI_PROVIDER ?? 'minimax'); // rule | mock | minimax | qwen36
+const AI_PROVIDER = normalizeProviderName(process.env.AI_PROVIDER ?? 'qwen36'); // rule | mock | <注册表里的模型 key>，见 llm/modelRegistry.ts
 const DEFAULT_AI_AUTOPLAY = process.env.AI_AUTOPLAY === '1'; // 默认手动，便于观察 AI 单步决策
 const DEFAULT_AI_HINT = process.env.LLM_HINT !== '0'; // LLM prompt 默认带空间动作 hint；=0 关闭
 const DEFAULT_SOCIAL_CHAT = process.env.SOCIAL_CHAT === '1'; // 自由社交聊天默认关，防 token 失控；=1 默认开
 const PLAYER_MODE = (process.env.PLAYER_MODE ?? 'all-ai').toLowerCase(); // all-ai | human0
 
+/** provider 字符串归一到稳定 key（rule/mock/注册表模型 key）；细节见 modelRegistry.resolveProviderKey */
 function normalizeProviderName(raw: string): string {
-  const v = String(raw ?? '').trim().toLowerCase();
-  if (v === 'llm' || v === 'minimax' || v === 'minimax-m27' || v === 'minimax-m2.7') {
-    return 'minimax';
-  }
-  if (v === 'qwen' || v === 'qwen36' || v === 'qwen3.6' || v === 'qwen3.6-plus') {
-    return 'qwen36';
-  }
-  if (v === 'rule' || v === 'mock') return v;
-  return 'rule';
+  return resolveProviderKey(raw);
 }
 
 function aiProviderOptions(): AiControlState['providerOptions'] {
   return [
     { key: 'rule', label: '规则 AI', available: true },
     { key: 'mock', label: 'Mock LLM', available: true },
-    {
-      key: 'minimax',
-      label: `MiniMax ${MINIMAX_MODEL}`,
-      model: MINIMAX_MODEL,
-      available: Boolean(process.env.MINIMAX_API_KEY),
-      reason: process.env.MINIMAX_API_KEY ? undefined : '缺 MINIMAX_API_KEY',
-    },
-    {
-      key: 'qwen36',
-      label: `Qwen ${QWEN_MODEL}`,
-      model: QWEN_MODEL,
-      available: Boolean(process.env.ALI_CODING_PLAN_KEY),
-      reason: process.env.ALI_CODING_PLAN_KEY ? undefined : '缺 ALI_CODING_PLAN_KEY',
-    },
+    ...llmModelOptions(),
   ];
 }
 
@@ -869,40 +844,27 @@ function buildProvider(
   state: GameState,
   useHint: boolean,
 ): AiDecisionProvider {
-  switch (normalizeProviderName(name)) {
-    case 'mock':
-      return createMockProvider();
-    case 'rule':
-      return createRuleProvider(board, state);
-    case 'minimax': {
-      const apiKey = process.env.MINIMAX_API_KEY;
-      if (!apiKey) {
-        console.warn(
-          '[catan-server] MiniMax provider 缺 MINIMAX_API_KEY，本次回退到 rule（请在 .env 里填上）',
-        );
-        return createRuleProvider(board, state);
-      }
-      return createLlmProvider({ apiKey, useHint });
-    }
-    case 'qwen36': {
-      const apiKey = process.env.ALI_CODING_PLAN_KEY;
-      if (!apiKey) {
-        console.warn(
-          '[catan-server] Qwen provider 缺 ALI_CODING_PLAN_KEY，本次回退到 rule（请在 .env 里填上）',
-        );
-        return createRuleProvider(board, state);
-      }
-      return createQwenProvider({
-        apiKey,
-        baseUrl: QWEN_BASE_URL,
-        model: QWEN_MODEL,
-        useHint,
-      });
-    }
-    default:
-      console.warn(`[catan-server] 未知 AI_PROVIDER="${name}"，回退到 rule`);
-      return createRuleProvider(board, state);
+  const key = resolveProviderKey(name);
+  if (key === 'mock') return createMockProvider();
+  if (key === 'rule') return createRuleProvider(board, state);
+
+  // 其余一律是注册表里的 LLM 模型：按 api 形态分派到对应 adapter
+  const spec = findModel(key);
+  if (!spec) {
+    console.warn(`[catan-server] 未知 AI_PROVIDER="${name}"，回退到 rule`);
+    return createRuleProvider(board, state);
   }
+  const apiKey = process.env[spec.apiKeyEnv];
+  if (!apiKey) {
+    console.warn(
+      `[catan-server] ${spec.label} 缺 ${spec.apiKeyEnv}，本次回退到 rule（请在 .env 里填上）`,
+    );
+    return createRuleProvider(board, state);
+  }
+  if (spec.api === 'anthropic') {
+    return createLlmProvider({ apiKey, host: spec.endpoint, model: spec.model, useHint });
+  }
+  return createQwenProvider({ apiKey, baseUrl: spec.endpoint, model: spec.model, useHint });
 }
 
 // 事件驱动的 AI 驱动循环：每次 dispatch 后调用；非 AI 回合 / gameOver 自然停。

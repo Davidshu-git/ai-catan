@@ -2,7 +2,8 @@
 // 用法（容器内、网络外，因为 LLM 是公网端点）：
 //   docker run --rm --env-file .env -v "$PWD":/app -w /app node:20-alpine \
 //     sh -c "npm install --no-fund --no-audit --silent && npx tsx server/llmSmoke.ts"
-// 可用 AI_PROVIDER=minimax（默认）或 AI_PROVIDER=qwen36。
+// 可用 AI_PROVIDER=qwen36（默认）；minimax 已退役，但 anthropic adapter 仍在，
+// 设 AI_PROVIDER=minimax + 填 MINIMAX_API_KEY 仍可手动走该 adapter。
 
 import { createLlmProvider } from './llm/llmProvider';
 import { createQwenProvider } from './llm/qwenProvider';
@@ -10,7 +11,7 @@ import type { LegalAction, LlmDecisionInput } from './llm/types';
 import type { PlayerView } from './llm/stateTranslator';
 import { COSTS } from '../shared/types';
 
-const providerName = (process.env.AI_PROVIDER ?? 'minimax').toLowerCase();
+const providerName = (process.env.AI_PROVIDER ?? 'qwen36').toLowerCase();
 const provider =
   providerName === 'qwen36' || providerName === 'qwen' || providerName === 'qwen3.6-plus'
     ? (() => {
