@@ -9,6 +9,7 @@
 // reducer 不感知它；server 重启丢失可接受（与现状一致）。
 // ============================================================
 
+import { DEBT_TAG_THRESHOLD } from '../../shared/protocol';
 import { publicVP } from '../../shared/rules';
 import { playerDisplayName } from '../../shared/state';
 import {
@@ -282,8 +283,9 @@ function relationshipTags(r: Relationship): string[] {
   else if (r.trust <= -6) tags.push('有嫌隙');
   if (r.threat >= 18) tags.push('高度警惕（领先威胁）');
   else if (r.threat >= 8) tags.push('需提防');
-  if (r.debt >= 2) tags.push('我欠他人情');
-  else if (r.debt <= -2) tags.push('他欠我人情');
+  // 人情带量级：阈值与前端角标共用 DEBT_TAG_THRESHOLD，保证模型读到的和观察者看到的一致
+  if (r.debt >= DEBT_TAG_THRESHOLD) tags.push(`我欠他人情(${r.debt})`);
+  else if (r.debt <= -DEBT_TAG_THRESHOLD) tags.push(`他欠我人情(${-r.debt})`);
   return tags;
 }
 

@@ -208,7 +208,7 @@ LLM prompt / hint 里的骰点概率权重统一叫**产出点**，不要再写�
 
 `GET /health` 始终可用。`TRACE_HTTP=1` 时额外开放只读 JSON 接口：`/api/sessions` 返回房间摘要；`/api/traces/ai?room=default&limit=N`、`/api/traces/trade?...`、`/api/traces/social?...` 返回对应内存 buffer 最近 N 条。AI trace 事件可能带完整 prompt/modelContext，只用于本地调试，不要暴露公网。
 
-**AI 社交房间（2026-05-23）。** 在交易/谈判之上叠了一层"社交"，详见 `docs/ai-social-room-design.md`：
+**AI 社交房间（2026-05-23）。** 在交易/谈判之上叠了一层"社交"：
 - **关系账本** `server/social/relationshipLedger.ts`：每个玩家对他人的 `{trust,threat,debt}`，由成交（互信）/强盗（嫌隙）/最长路·最大军队·逼近胜利（警惕）等事件**确定性更新（零 LLM）**，压成一句"你对各家的看法"注入交易 prompt，影响 AI 报价/接受倾向。纯服务端编排状态，不进 `shared/`。
 - **多轮房间式谈判**：`negotiationManager` 的 AI↔AI 谈判是多轮的（参与方互相反应、发起方对最优还价回应、竞争择优原子成交），`ROOM_ROUNDS_MAX` + `messagesPerSession` 双重封顶 LLM 调用。
 - **事件触发社交发言** `server/social/socialChat.ts` + `server/llm/socialProvider.ts`：白名单事件 + 规则门控 + 冷却 + 每回合/整局硬预算挑人发一句嘴炮/结盟/威胁。**默认关**（`SOCIAL_CHAT=1` 开），`set_social_chat` 运行时实时熄火，是防 token 失控的刹车。rule/mock 用模板兜底、LLM 走便宜模型。

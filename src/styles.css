@@ -1673,6 +1673,18 @@ select {
 .rel-matrix th { color: var(--ink); background: rgba(0, 0, 0, 0.05); }
 .rel-matrix td { color: var(--ink); }
 .rel-matrix .rel-self { color: var(--muted); }
+.rel-matrix .rel-cell { position: relative; }
+.rel-debt-badge {
+  position: absolute;
+  top: 0;
+  right: 1px;
+  font-size: 8px;
+  font-weight: 800;
+  line-height: 1;
+  color: var(--muted);
+  opacity: 0.85;
+  pointer-events: none;
+}
 
 .room-social-stream {
   flex: 1 1 auto;

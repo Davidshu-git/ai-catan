@@ -308,3 +308,10 @@ export interface RelationshipSnapshotEvent {
   }>;
   ts: number;
 }
+
+/**
+ * 人情账「上墙 / 进 prompt」的统一阈值（单一事实来源）：`|debt| >= 此值` 才显示。
+ * 服务端 `relationshipTags`（喂 LLM 的措辞）与前端关系矩阵角标共用它，保证观察者看到的
+ * 和模型读到的口径一致——改阈值只动这一处，两侧自动跟随，不会漂移。
+ */
+export const DEBT_TAG_THRESHOLD = 2;

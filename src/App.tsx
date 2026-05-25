@@ -18,6 +18,7 @@ import type {
   TradeChatStartedEvent,
   TradeOfferEvent,
 } from '../shared/protocol';
+import { DEBT_TAG_THRESHOLD } from '../shared/protocol';
 import {
   handSize,
   longestRoadLength,
@@ -1936,9 +1937,21 @@ function RelationshipMatrix({
     const rgb = net >= 0 ? '90,150,90' : '170,70,60';
     return { background: `rgba(${rgb},${0.12 + mag * 0.5})` };
   };
+  // 人情角标：与 LLM 措辞共用 DEBT_TAG_THRESHOLD 阈值，行(我)对列(他)。
+  // debt>0=我欠他(↑)、debt<0=他欠我(↓)，数字为量级；|debt|<阈值不显示。
+  const debtBadge = (c: ReturnType<typeof cell>) => {
+    if (!c || Math.abs(c.debt) < DEBT_TAG_THRESHOLD) return null;
+    return c.debt > 0 ? `↑${c.debt}` : `↓${-c.debt}`;
+  };
+  const debtTitle = (c: ReturnType<typeof cell>) => {
+    if (!c || Math.abs(c.debt) < DEBT_TAG_THRESHOLD) return `人情 ${c?.debt ?? 0}`;
+    return c.debt > 0 ? `我欠他人情 ${c.debt}` : `他欠我人情 ${-c.debt}`;
+  };
   return (
     <div className="rel-matrix">
-      <div className="rel-matrix-title">关系账本（行对列的看法：信任绿 / 警惕红）</div>
+      <div className="rel-matrix-title">
+        关系账本（行对列的看法：信任绿 / 警惕红；角标 ↑我欠他 / ↓他欠我）
+      </div>
       <table>
         <thead>
           <tr>
@@ -1957,13 +1970,16 @@ function RelationshipMatrix({
               {ids.map((t) => {
                 if (v === t) return <td key={t} className="rel-self">—</td>;
                 const c = cell(v, t);
+                const badge = debtBadge(c);
                 return (
                   <td
                     key={t}
+                    className="rel-cell"
                     style={cellStyle(c)}
-                    title={c ? `信任 ${c.trust}｜警惕 ${c.threat}｜人情 ${c.debt}` : '中立'}
+                    title={c ? `信任 ${c.trust}｜警惕 ${c.threat}｜${debtTitle(c)}` : '中立'}
                   >
                     {c ? `${c.trust}/${c.threat}` : '·'}
+                    {badge && <span className="rel-debt-badge">{badge}</span>}
                   </td>
                 );
               })}
