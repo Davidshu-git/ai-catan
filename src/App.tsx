@@ -1184,12 +1184,12 @@ function MainActions({
           </button>
         </div>
         {mode && (
-          <p className="cost" style={{ marginTop: 8 }}>
+          <p className="cost">
             已进入「{mode === 'road' ? '修路' : mode === 'settlement' ? '建房屋' : '升级城市'}」模式，点击棋盘上的高亮位置。再次点击按钮取消。
           </p>
         )}
         {bankOpen && (
-          <div className="bank-trade-row" style={{ marginTop: 8 }}>
+          <div className="bank-trade-row">
             <select value={bankGive} onChange={(e) => setBankGive(e.target.value as Resource)}>
               {RESOURCES.map((r) => (
                 <option key={r} value={r}>
@@ -1268,7 +1268,7 @@ function DevCards({
   return (
     <div className="card">
       <h2>发展卡</h2>
-      <div className="tag-row" style={{ marginBottom: 8 }}>
+      <div className="tag-row">
         {(Object.keys(counts) as DevCard[])
           .filter((c) => counts[c] > 0)
           .map((c) => (
@@ -1430,54 +1430,48 @@ function HumanNegotiation({
 
   return (
     <div className={`card human-negotiation${dock ? ' trade-chat-dock' : ''}`}>
-      {onEndTurn && (
-        <button
-          type="button"
-          className="btn warn end-turn-mini"
-          onClick={onEndTurn}
-          title="结束本回合"
-        >
-          结束回合
-        </button>
-      )}
-      {activeMine ? (
-        <>
-          <div className="trade-limits human-trade-limits">
-            <span>
-              发言 {humanTradeState.messagesUsed ?? 0}/{humanTradeState.messagesMax ?? 0}
-            </span>
-            {humanTradeState.busy && <span>AI 思考中</span>}
-          </div>
-          {(humanTradeState.standingDeals ?? []).length > 0 && (
-            <div className="human-deals">
-              {(humanTradeState.standingDeals ?? []).map((deal) => (
-                <div key={`${deal.player}-${deal.source}`} className="human-deal">
-                  <div>
-                    <b>{deal.note}</b>
-                    <span>
-                      你给 {resSummary(deal.give)}，收到 {resSummary(deal.receive)}
-                    </span>
-                  </div>
-                  <button
-                    type="button"
-                    className="btn good"
-                    disabled={busy || !connected}
-                    onClick={() => finalize(deal.player)}
-                  >
-                    成交
-                  </button>
-                </div>
-              ))}
+      {activeMine && (humanTradeState.standingDeals ?? []).length > 0 && (
+        <div className="human-deals">
+          {(humanTradeState.standingDeals ?? []).map((deal) => (
+            <div key={`${deal.player}-${deal.source}`} className="human-deal">
+              <div>
+                <b>{deal.note}</b>
+                <span>
+                  你给 {resSummary(deal.give)}，收到 {resSummary(deal.receive)}
+                </span>
+              </div>
+              <button
+                type="button"
+                className="btn good"
+                disabled={busy || !connected}
+                onClick={() => finalize(deal.player)}
+              >
+                成交
+              </button>
             </div>
-          )}
-        </>
-      ) : null}
+          ))}
+        </div>
+      )}
 
       <details className="trade-quote-details">
         <summary>
           <span>报价</span>
           <span>给 {resSummary(give)}</span>
           <span>收 {resSummary(recv)}</span>
+          {onEndTurn && (
+            <button
+              type="button"
+              className="btn warn end-turn-mini"
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                onEndTurn();
+              }}
+              title="结束本回合"
+            >
+              结束回合
+            </button>
+          )}
         </summary>
         <p className="cost">我给出：</p>
         <div className="trade-grid">
@@ -1583,7 +1577,7 @@ function DiscardPanel({
       </div>
       <button
         className="btn warn"
-        style={{ marginTop: 10, width: '100%' }}
+        style={{ width: '100%' }}
         disabled={picked !== need}
         onClick={() => dispatch({ type: 'DISCARD', player: seat, cards: sel })}
       >
@@ -1610,7 +1604,7 @@ function PendingTrade({ game, dispatch }: { game: FullGame; dispatch: (a: Action
         <br />
         想换走你的：{fmt(t.receive)}
       </p>
-      <div className="btn-grid" style={{ marginTop: 8 }}>
+      <div className="btn-grid">
         <button className="btn good" onClick={() => dispatch({ type: 'RESPOND_TRADE', accept: true })}>
           接受
         </button>
