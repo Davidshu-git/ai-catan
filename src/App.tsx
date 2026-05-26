@@ -318,6 +318,16 @@ export function App() {
   const aiStepAckedRef = useRef(false);
   const aiStepSawWorkRef = useRef(false);
   const aiAutoActiveRef = useRef(false);
+  // 观察面板自动跳转：仅在玩家首次点过自动/单步之后才生效；用户最近 8s 手动切过 tab 则暂停打扰；
+  // 首次/重连后 1.5s 内不跳，避免被服务端 buffer 回放干扰
+  const inspectorTabRef = useRef<InspectorTab>('thoughts');
+  const lastUserTabClickRef = useRef(0);
+  const userStartedAiRef = useRef(false);
+  const autoJumpReadyRef = useRef(false);
+  const autoJumpTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    inspectorTabRef.current = inspectorTab;
+  }, [inspectorTab]);
 
   // 防抖：拖拽时高频更新，停手 200ms 后才落盘
   useEffect(() => {
@@ -367,6 +377,20 @@ export function App() {
 
   const setAiAutoplay = useCallback((autoplay: boolean) => {
     socket.emit('set_ai_autoplay', { autoplay });
+    if (autoplay) userStartedAiRef.current = true;
+  }, []);
+
+  const maybeJumpInspector = useCallback((tab: InspectorTab) => {
+    if (!autoJumpReadyRef.current) return;
+    if (!userStartedAiRef.current) return;
+    if (Date.now() - lastUserTabClickRef.current < 8000) return;
+    if (inspectorTabRef.current === tab) return;
+    setInspectorTab(tab);
+  }, []);
+
+  const handleInspectorTabChange = useCallback((tab: InspectorTab) => {
+    setInspectorTab(tab);
+    lastUserTabClickRef.current = Date.now();
   }, []);
 
   const setAiHint = useCallback((hint: boolean) => {
@@ -430,6 +454,7 @@ export function App() {
     // `if (!aiStepAckedRef.current) return` 漏掉 → aiStepSawWorkRef 永不置上。
     // 普通动作步靠 ai_thought 兜底结束计时，但纯交易谈判步只发 trade_chat_*、不发 ai_thought，
     // 于是计时永不结束、单步按钮一直 disabled。提前置 acked 即可让 queued=true 被正确捕获。
+    userStartedAiRef.current = true;
     aiStepAckedRef.current = true;
     aiStepSawWorkRef.current = false;
     setAiStepTimer((timer) => ({
@@ -494,6 +519,12 @@ export function App() {
       setThoughtLog([]);
       setTradeLog([]);
       setSocialLog([]);
+      // 1.5s 内服务端回放 buffer 的事件不应触发自动跳，等回放收尾再放行
+      autoJumpReadyRef.current = false;
+      if (autoJumpTimerRef.current) clearTimeout(autoJumpTimerRef.current);
+      autoJumpTimerRef.current = setTimeout(() => {
+        autoJumpReadyRef.current = true;
+      }, 1500);
     };
     const onDisconnect = () => setConnected(false);
     const onSync = (g: FullGame) => setGame(g);
@@ -517,19 +548,31 @@ export function App() {
       } else if (aiAutoActiveRef.current) {
         finishAiAutoTimer(true);
       }
+      maybeJumpInspector('thoughts');
     };
-    const onError = (ev: AiErrorEvent) => append({ kind: 'error', data: ev });
-    const onTradeStarted = (ev: TradeChatStartedEvent) =>
+    const onError = (ev: AiErrorEvent) => {
+      append({ kind: 'error', data: ev });
+      maybeJumpInspector('thoughts');
+    };
+    const onTradeStarted = (ev: TradeChatStartedEvent) => {
       appendTrade({ kind: 'started', data: ev });
-    const onTradeMessage = (ev: TradeChatMessageEvent) =>
+      maybeJumpInspector('trades');
+    };
+    const onTradeMessage = (ev: TradeChatMessageEvent) => {
       appendTrade({ kind: 'message', data: ev });
-    const onTradeClosed = (ev: TradeChatClosedEvent) =>
+      maybeJumpInspector('trades');
+    };
+    const onTradeClosed = (ev: TradeChatClosedEvent) => {
       appendTrade({ kind: 'closed', data: ev });
-    const onSocialChat = (ev: SocialChatEvent) =>
+      maybeJumpInspector('trades');
+    };
+    const onSocialChat = (ev: SocialChatEvent) => {
       setSocialLog((arr) => {
         const next = [...arr, ev];
         return next.length > SOCIAL_LOG_MAX ? next.slice(-SOCIAL_LOG_MAX) : next;
       });
+      maybeJumpInspector('room');
+    };
     const onRelationship = (ev: RelationshipSnapshotEvent) => setRelationships(ev);
     const onHumanTradeState = (ev: HumanTradeStateEvent) => setHumanTradeState(ev);
     const onAiControl = (ev: AiControlState) => {
@@ -576,8 +619,9 @@ export function App() {
       socket.off('relationship_state', onRelationship);
       socket.off('human_trade_state', onHumanTradeState);
       socket.off('ai_control_state', onAiControl);
+      if (autoJumpTimerRef.current) clearTimeout(autoJumpTimerRef.current);
     };
-  }, [finishAiAutoTimer, finishAiStepTimer, startAiAutoTimer]);
+  }, [finishAiAutoTimer, finishAiStepTimer, maybeJumpInspector, startAiAutoTimer]);
 
   // 识别"新局"：以 gameId 变化为准清空思考流 / 谈判流。
   // 比"turn/phase/setupIndex 归零"的旧启发更稳——对所有客户端一致，
@@ -752,7 +796,7 @@ export function App() {
         />
         <InspectorPanel
           activeTab={inspectorTab}
-          onTabChange={setInspectorTab}
+          onTabChange={handleInspectorTabChange}
           thoughtItems={thoughtLog}
           tradeItems={tradeLog}
           socialItems={socialLog}
