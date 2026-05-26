@@ -1004,7 +1004,7 @@ function Players({
                 )}
                 {state.current === pl.id && processingMs != null && (
                   <span className="player-time">
-                    {(processingMs / 1000).toFixed(1)}秒
+                    {Math.round(processingMs / 1000)}秒
                   </span>
                 )}
               </div>
