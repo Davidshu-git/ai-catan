@@ -2262,20 +2262,8 @@ function TradeLogContent({
               <span className="thought-tag thought-tag-prov">
                 {closed ? tradeStatusLabel(closed.status) : '进行中'}
               </span>
-              {started && (
-                <span className="thought-tag">
-                  {playerLabel(players, started.initiator)}
-                </span>
-              )}
             </div>
-            {started && (
-              <>
-                <div className="trade-participants">
-                  {started.participants.map((p) => playerLabel(players, p)).join(' / ')}
-                </div>
-                <TradeOfferLine offer={started.proposedTrade} players={players} />
-              </>
-            )}
+            {started && <TradeOfferLine offer={started.proposedTrade} players={players} />}
             <div className="trade-messages">
               {session.messages.map((msg, idx) => (
                 <div
@@ -2285,6 +2273,7 @@ function TradeLogContent({
                   <div className="trade-message-head">
                     <span className="player-dot" style={{ background: msg.speaker == null ? '#66513e' : players[msg.speaker]?.color }} />
                     <b>{playerLabel(players, msg.speaker)}</b>
+                    <span className="trade-round">第 {idx + 1} 轮</span>
                     <span>{decisionLabel(msg.decision)}</span>
                   </div>
                   <div className="trade-message-text">{msg.message}</div>
