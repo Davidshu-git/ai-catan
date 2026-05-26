@@ -31,6 +31,19 @@ docker run --rm --network catan_default -v "$PWD":/app -w /app node:20-alpine \
 
 > ⚠️ 容器内 `npm install` 会把 lockfile 写回宿主工作树（volume 挂载副作用）。每次跑完手工 `rm -f package-lock.json`，或在提交前用 `git status --short` 确认未被误纳入；不要 `git add .`。
 
+### 内网反代入口
+
+局域网域名入口为 `http://catan.home.arpa/`，DNS / hosts 需把 `catan.home.arpa` 指向反代容器的 macvlan IP `192.168.100.178`。宿主机本身通常不能直接访问这个 macvlan IP，这是 Docker macvlan 的正常限制；可从局域网其他设备访问，或在 `rproxy-caddy` 容器内用 `Host: catan.home.arpa` 验证。
+
+反代配置不在本仓库，而在相邻项目 `/volume1/server/.openclaw/workspace/projects/reverse-proxy`：
+- `Caddyfile`：`http://catan.home.arpa { reverse_proxy catan:5173 }`
+- `docker-compose.yml`：`rproxy-caddy` 需要挂入外部网络 `catan_default`，否则不能按容器名访问 `catan:5173`
+- 改完反代后在 reverse-proxy 项目内执行 `docker compose up -d`
+
+Vite dev server 有 Host 白名单保护。通过 `catan.home.arpa` 反代访问时，`vite.config.ts` 的 `server.allowedHosts` 必须包含 `catan.home.arpa`，否则 Caddy 能转到前端容器但 Vite 会返回 `403 Forbidden`。
+
+站点 favicon 位于 `public/favicon.ico`、`public/favicon-32x32.png`、`public/apple-touch-icon.png`，`index.html` 用带版本号的绝对路径引用。若浏览器仍显示旧图标，优先考虑浏览器或反代缓存。
+
 无 lint、无单元测试框架。**`sim.ts` 是事实上的测试**：跑 60 局全 AI 对战，逐步校验不变量（每种资源 bank+玩家恒为 19、资源非负、VP ≤ 13）、检测死循环（状态指纹 600 步不变即失败），有问题 `exit 1`。改动 `shared/` 任何文件后都应在容器内跑一遍 typecheck + sim。
 
 已验证基线（2026-05-20，容器内）：`tsc --noEmit`（前端 + 后端）零错误；压测 60/60 局正常结束、不变量失败 0、无死循环、平均约 130 回合；docker compose 起 stack 后 socket 冒烟通过。

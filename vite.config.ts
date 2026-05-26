@@ -10,6 +10,7 @@ export default defineConfig(({ command }) => ({
   server: {
     host: true,
     port: 5173,
+    allowedHosts: ['catan.home.arpa'],
     proxy:
       command === 'serve' && SOCKET_PROXY
         ? {
