@@ -207,7 +207,7 @@ LLM prompt / hint 里的骰点概率权重统一叫**产出点**，不要再写�
 | C → S | `human_trade_end` | ack | 真人主动结束当前谈判 |
 | S → C | `ai_thought` | `AiThoughtEvent` | 一次 AI 决策的思考流（player/agentName/phase/thought/actionId/actionHint/action/modelContext/timing/provider/retries/status）；`action` 已通过 Maker-Checker，可用于前端棋盘高亮；`actionHint` 是最终选中动作的语义化情报；`modelContext` 展示完整模型输入 / Provider 输入；`timing` 展示服务端调用链路耗时 |
 | S → C | `ai_error` | `AiErrorEvent` | Provider 输出非法 / 调用失败时广播；重试过程的错误也会发，含 agentName；错误事件也可带 `modelContext` 与 `timing` 方便分析失败输入和耗时 |
-| S → C | `ai_control_state` | `AiControlState` | AI 控制状态（autoplay/queued/busy/canStep/hintEnabled/socialChatEnabled/provider/currentAgent）；连接时与状态变化时广播 |
+| S → C | `ai_control_state` | `AiControlState` | AI 控制状态（autoplay/queued/busy/canStep/hintEnabled/socialChatEnabled/provider/currentAgent/llmStats）；连接时与状态变化时广播；`llmStats` 是本次进程启动以来全部 LLM 调用（决策+交易+社交）累计的调用次数/输入输出 token/缓存命中，每次 LLM 调用完成都会增量广播，新局或服务端重启清零（不持久化） |
 | S → C | `social_chat` | `SocialChatEvent` | 一条 AI 社交发言（player/agentName/trigger/target/kind/message/turn）；由强盗/最长路/最大军队/逼近胜利等事件触发，受开关+预算约束；连接时补拉最近 60 条 |
 | S → C | `relationship_state` | `RelationshipSnapshotEvent` | 关系账本扁平快照（各玩家对彼此的 trust/threat/debt）；连接时与每次社交跃迁后广播，供观察者「社交房间」面板可视化 |
 | S → C | `human_trade_state` | `HumanTradeStateEvent` | 真人谈判实时态（当前报价、AI 接受/还价候选、发言限流、busy）；连接时与每次变化广播 |

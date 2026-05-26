@@ -165,6 +165,18 @@ export interface AiControlState {
     provider: string;
     memorySize: number;
   };
+  /**
+   * LLM 调用累计统计（本次进程启动以来）。
+   * 决策 / 交易 / 社交三类 LLM 调用都计入；rule/mock 不计。
+   * 新局会清零；服务端重启亦清零（不持久化）。
+   */
+  llmStats: {
+    calls: number;
+    promptTokens: number;
+    completionTokens: number;
+    cacheReadTokens: number;
+    cacheCreationTokens: number;
+  };
 }
 
 export type TradeDecisionEvent =

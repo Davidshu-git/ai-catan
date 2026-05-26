@@ -15,6 +15,7 @@ import type {
   LlmDecisionInput,
   LlmDecisionOutput,
 } from './types';
+import { recordLlmUsage } from './stats';
 import type { PlayerView } from './stateTranslator';
 
 const DEFAULT_HOST = process.env.MINIMAX_API_HOST ?? 'api.minimaxi.com';
@@ -344,6 +345,14 @@ async function callMinimax(
           `[llm] cache read=${u.cache_read_input_tokens ?? 0} write=${u.cache_creation_input_tokens ?? 0} input=${u.input_tokens ?? 0} output=${u.output_tokens ?? 0}`,
         );
       }
+      recordLlmUsage({
+        promptTokens: u.input_tokens,
+        completionTokens: u.output_tokens,
+        cacheReadTokens: u.cache_read_input_tokens,
+        cacheCreationTokens: u.cache_creation_input_tokens,
+      });
+    } else {
+      recordLlmUsage({});
     }
     return text;
   } catch (err) {

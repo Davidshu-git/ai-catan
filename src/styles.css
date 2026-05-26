@@ -591,6 +591,15 @@ body {
 
 .btn-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }
 .btn-grid.ai-controls-grid { grid-template-columns: repeat(3, 1fr); }
+
+.llm-stats-line {
+  margin-top: 7px;
+  font-size: 10.5px;
+  font-weight: 800;
+  color: var(--muted);
+  text-align: center;
+  letter-spacing: 0.2px;
+}
 .btn-grid .btn { width: 100%; }
 .build-actions {
   grid-template-columns: repeat(5, minmax(0, 1fr));

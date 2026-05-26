@@ -9,6 +9,7 @@ import {
   buildLlmUserMessage,
   LLM_SYSTEM_PROMPT,
 } from './llmProvider';
+import { recordLlmUsage } from './stats';
 import type {
   AiDecisionProvider,
   LlmDecisionInput,
@@ -36,6 +37,11 @@ interface OpenAiChatResp {
       content?: string | Array<{ type?: string; text?: string }>;
     };
   }>;
+  usage?: {
+    prompt_tokens?: number;
+    completion_tokens?: number;
+    total_tokens?: number;
+  };
   [k: string]: unknown;
 }
 
@@ -150,6 +156,10 @@ async function callQwen(
     if (!text) {
       throw new Error(`Qwen 返回无 message.content：${JSON.stringify(json).slice(0, 300)}`);
     }
+    recordLlmUsage({
+      promptTokens: json.usage?.prompt_tokens,
+      completionTokens: json.usage?.completion_tokens,
+    });
     return text;
   } catch (err) {
     if ((err as Error).name === 'AbortError') {

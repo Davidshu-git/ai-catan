@@ -42,6 +42,7 @@ import { createLlmProvider } from './llm/llmProvider';
 import { createQwenProvider } from './llm/qwenProvider';
 import { resolveProviderKey, findModel, llmModelOptions } from './llm/modelRegistry';
 import { decideAiStep } from './llm/controller';
+import { getLlmStats, onLlmStatsChange, resetLlmStats } from './llm/stats';
 import {
   createAgentRuntimes,
   rememberAgentDecision,
@@ -402,6 +403,7 @@ function getAiControlState(session: Session): AiControlState {
           memorySize: currentAgent.memory.length,
         }
       : undefined,
+    llmStats: getLlmStats(),
   };
 }
 
@@ -1161,6 +1163,12 @@ const io = new Server(httpServer, {
   path: '/socket.io/',
 });
 
+// 每次 LLM 调用累计 usage 后，把最新 ai_control_state（含 llmStats）推给前端。
+// 单进程单房间，直接 emit 给 DEFAULT_ROOM；多房间架构出现后再按 session 拆分。
+onLlmStatsChange(() => {
+  emitAiControl(io, DEFAULT_ROOM);
+});
+
 io.on('connection', (socket: Socket) => {
   socket.join(DEFAULT_ROOM);
 
@@ -1608,6 +1616,7 @@ io.on('connection', (socket: Socket) => {
     s.tradeEvents = [];
     s.humanTrade = null;
     s.humanTradeSeq = 0;
+    resetLlmStats(); // 新局清零 LLM 调用计数（统计是按局观察的）
     broadcastState(io, DEFAULT_ROOM);
     emitHumanTradeState(io, DEFAULT_ROOM, s);
     emitAiControl(io, DEFAULT_ROOM, s);

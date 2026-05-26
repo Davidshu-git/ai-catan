@@ -217,6 +217,13 @@ const DEFAULT_AI_CONTROL: AiControlState = {
   providerOptions: [],
   agentProviders: {},
   agentPersonalities: {},
+  llmStats: {
+    calls: 0,
+    promptTokens: 0,
+    completionTokens: 0,
+    cacheReadTokens: 0,
+    cacheCreationTokens: 0,
+  },
 };
 
 const EMPTY_HUMAN_TRADE_STATE: HumanTradeStateEvent = { active: false };
@@ -857,6 +864,7 @@ function AiControls({
   const waiting = control.queued || control.busy;
   const stepDisabled = stepTimer.running || !connected || control.autoplay || waiting || !control.canStep;
 
+  const stats = control.llmStats;
   return (
     <div className="card card-plain">
       <div className="btn-grid ai-controls-grid">
@@ -880,8 +888,24 @@ function AiControls({
           单步
         </button>
       </div>
+      {stats && stats.calls > 0 && (
+        <div
+          className="llm-stats-line"
+          title={`决策 + 交易 + 社交全部累计；服务端重启或新局清零\n缓存：命中 ${formatTokens(stats.cacheReadTokens)} / 写入 ${formatTokens(stats.cacheCreationTokens)}`}
+        >
+          LLM {stats.calls} 次 · in {formatTokens(stats.promptTokens)} · out{' '}
+          {formatTokens(stats.completionTokens)}
+          {stats.cacheReadTokens > 0 && ` · cache ${formatTokens(stats.cacheReadTokens)}`}
+        </div>
+      )}
     </div>
   );
+}
+
+function formatTokens(n: number): string {
+  if (n < 1000) return String(n);
+  if (n < 10_000) return `${(n / 1000).toFixed(1)}k`;
+  return `${Math.round(n / 1000)}k`;
 }
 
 // ---------- 玩家面板 ----------

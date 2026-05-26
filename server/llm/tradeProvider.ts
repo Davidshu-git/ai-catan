@@ -20,6 +20,7 @@ import type {
 } from '../../shared/protocol';
 import type { AgentPromptContext } from './types';
 import { findModel, isLlmProvider, providerLabel } from './modelRegistry';
+import { recordLlmUsage } from './stats';
 
 // socialProvider 仍从本模块 import { providerLabel, isLlmProvider }，故把注册表的实现再导出
 export { providerLabel, isLlmProvider };
@@ -485,12 +486,24 @@ export async function callLlm(providerName: string, system: string, user: string
       }
       const json = (await resp.json()) as {
         content?: Array<{ type: string; text?: string }>;
+        usage?: {
+          input_tokens?: number;
+          output_tokens?: number;
+          cache_read_input_tokens?: number;
+          cache_creation_input_tokens?: number;
+        };
       };
       const text = (json.content ?? [])
         .filter((b) => b.type === 'text' && b.text)
         .map((b) => b.text!)
         .join('');
       if (!text) throw new Error(`${spec.label} trade 无 text 块`);
+      recordLlmUsage({
+        promptTokens: json.usage?.input_tokens,
+        completionTokens: json.usage?.output_tokens,
+        cacheReadTokens: json.usage?.cache_read_input_tokens,
+        cacheCreationTokens: json.usage?.cache_creation_input_tokens,
+      });
       return text;
     }
 
@@ -519,6 +532,10 @@ export async function callLlm(providerName: string, system: string, user: string
       choices?: Array<{
         message?: { content?: string | Array<{ type?: string; text?: string }> };
       }>;
+      usage?: {
+        prompt_tokens?: number;
+        completion_tokens?: number;
+      };
     };
     const content = json.choices?.[0]?.message?.content;
     const text =
@@ -528,6 +545,10 @@ export async function callLlm(providerName: string, system: string, user: string
           ? content.map((b) => b.text ?? '').join('')
           : '';
     if (!text) throw new Error(`${spec.label} trade 无内容`);
+    recordLlmUsage({
+      promptTokens: json.usage?.prompt_tokens,
+      completionTokens: json.usage?.completion_tokens,
+    });
     return text;
   } catch (err) {
     if ((err as Error).name === 'AbortError')
