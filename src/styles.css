@@ -1216,12 +1216,6 @@ select {
   font-size: 12px;
 }
 
-.trade-round {
-  font-size: 10.5px;
-  color: var(--muted);
-  font-weight: 800;
-}
-
 .trade-message-head span:last-child {
   color: var(--accent-d);
   font-size: 10.5px;

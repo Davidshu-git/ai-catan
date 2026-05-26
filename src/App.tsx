@@ -2229,6 +2229,24 @@ function TradeLogContent({
     return [...map.values()].sort((a, b) => b.ts - a.ts).slice(0, 20);
   }, [items]);
 
+  // 本回合第几次谈判：按 (turn, initiator) 分组，按 ts 升序计数 1..N
+  const turnRoundBySessionId = useMemo(() => {
+    const ordered = [...sessions].sort((a, b) => a.ts - b.ts);
+    const counter = new Map<string, number>();
+    const map = new Map<string, number>();
+    for (const s of ordered) {
+      const turn = s.started?.turn ?? s.closed?.turn;
+      const initiator =
+        s.started?.initiator ?? s.messages.find((m) => m.speaker != null)?.speaker ?? null;
+      if (turn == null || initiator == null) continue;
+      const key = `${turn}#${initiator}`;
+      const next = (counter.get(key) ?? 0) + 1;
+      counter.set(key, next);
+      map.set(s.sessionId, next);
+    }
+    return map;
+  }, [sessions]);
+
   if (sessions.length === 0) {
     return (
       <div className="trade-log event-feed">
@@ -2258,6 +2276,9 @@ function TradeLogContent({
             <div className="trade-session-head">
               <span className="trade-session-title">
                 第 {started?.turn ?? closed?.turn ?? '?'} 回合
+                {turnRoundBySessionId.get(session.sessionId) != null && (
+                  <> · 第 {turnRoundBySessionId.get(session.sessionId)} 轮</>
+                )}
               </span>
               <span className="thought-tag thought-tag-prov">
                 {closed ? tradeStatusLabel(closed.status) : '进行中'}
@@ -2273,7 +2294,6 @@ function TradeLogContent({
                   <div className="trade-message-head">
                     <span className="player-dot" style={{ background: msg.speaker == null ? '#66513e' : players[msg.speaker]?.color }} />
                     <b>{playerLabel(players, msg.speaker)}</b>
-                    <span className="trade-round">第 {idx + 1} 轮</span>
                     <span>{decisionLabel(msg.decision)}</span>
                   </div>
                   <div className="trade-message-text">{msg.message}</div>
