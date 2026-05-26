@@ -800,6 +800,7 @@ export function App() {
           humanSeat={activeHumanSeat}
           humanTradeState={humanTradeState}
           connected={connected}
+          llmStats={aiControl.llmStats}
         />
         <InspectorPanel
           activeTab={inspectorTab}
@@ -864,7 +865,6 @@ function AiControls({
   const waiting = control.queued || control.busy;
   const stepDisabled = stepTimer.running || !connected || control.autoplay || waiting || !control.canStep;
 
-  const stats = control.llmStats;
   return (
     <div className="card card-plain">
       <div className="btn-grid ai-controls-grid">
@@ -888,16 +888,6 @@ function AiControls({
           单步
         </button>
       </div>
-      {stats && stats.calls > 0 && (
-        <div
-          className="llm-stats-line"
-          title={`决策 + 交易 + 社交全部累计；服务端重启或新局清零\n缓存：命中 ${formatTokens(stats.cacheReadTokens)} / 写入 ${formatTokens(stats.cacheCreationTokens)}`}
-        >
-          LLM {stats.calls} 次 · in {formatTokens(stats.promptTokens)} · out{' '}
-          {formatTokens(stats.completionTokens)}
-          {stats.cacheReadTokens > 0 && ` · cache ${formatTokens(stats.cacheReadTokens)}`}
-        </div>
-      )}
     </div>
   );
 }
@@ -1051,6 +1041,7 @@ function HumanActionPanel({
   humanSeat,
   humanTradeState,
   connected,
+  llmStats,
 }: {
   game: FullGame;
   mode: BoardMode;
@@ -1060,11 +1051,24 @@ function HumanActionPanel({
   humanSeat: number | null;
   humanTradeState: HumanTradeStateEvent;
   connected: boolean;
+  llmStats: AiControlState['llmStats'];
 }) {
   return (
     <div className="human-action-panel">
       {humanSeat == null ? (
-        <div className="hint">当前为 AI 观察局。轮到 AI 时可用底部控制区推进。</div>
+        <div className="hint observer-hint">
+          <span>当前为 AI 观察局。轮到 AI 时可用底部控制区推进。</span>
+          {llmStats && llmStats.calls > 0 && (
+            <span
+              className="observer-llm-stats"
+              title={`决策 + 交易 + 社交全部累计；新局或服务端重启清零\n缓存命中 ${formatTokens(llmStats.cacheReadTokens)} · 写入 ${formatTokens(llmStats.cacheCreationTokens)}`}
+            >
+              LLM {llmStats.calls} · in {formatTokens(llmStats.promptTokens)} · out{' '}
+              {formatTokens(llmStats.completionTokens)}
+              {llmStats.cacheReadTokens > 0 && ` · cache ${formatTokens(llmStats.cacheReadTokens)}`}
+            </span>
+          )}
+        </div>
       ) : (
         <Phase
           game={game}
