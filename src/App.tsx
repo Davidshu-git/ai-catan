@@ -488,7 +488,13 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    const onConnect = () => setConnected(true);
+    const onConnect = () => {
+      setConnected(true);
+      // 重连时服务端会再回放 buffer，本地清空避免与回放叠加产生重复
+      setThoughtLog([]);
+      setTradeLog([]);
+      setSocialLog([]);
+    };
     const onDisconnect = () => setConnected(false);
     const onSync = (g: FullGame) => setGame(g);
     const append = (item: ThoughtLogItem) =>
@@ -1871,11 +1877,20 @@ function RoomContent({
         ) : (
           reversed.map((ev, i) => (
             <div key={`${ev.ts}-${i}`} className="room-social-line">
-              <span className="room-social-who">
-                {playerDisplayName(players, ev.player)}
-              </span>
-              <span className="room-social-kind">{SOCIAL_KIND_LABEL[ev.kind] ?? ev.kind}</span>
-              <span className="room-social-msg">{ev.message}</span>
+              <div className="room-social-header">
+                <span className="room-social-who">
+                  {playerDisplayName(players, ev.player)}
+                </span>
+                <span className="room-social-kind">
+                  {SOCIAL_KIND_LABEL[ev.kind] ?? ev.kind}
+                </span>
+                {ev.target != null && ev.target !== ev.player && (
+                  <span className="room-social-target">
+                    {playerDisplayName(players, ev.target)}
+                  </span>
+                )}
+              </div>
+              <div className="room-social-msg">{ev.message}</div>
             </div>
           ))
         )}
