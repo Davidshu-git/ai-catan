@@ -1876,9 +1876,6 @@ function RoomContent({
               </span>
               <span className="room-social-kind">{SOCIAL_KIND_LABEL[ev.kind] ?? ev.kind}</span>
               <span className="room-social-msg">{ev.message}</span>
-              {ev.target != null && ev.target !== ev.player && (
-                <span className="room-social-target">→ {playerDisplayName(players, ev.target)}</span>
-              )}
             </div>
           ))
         )}

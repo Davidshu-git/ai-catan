@@ -1748,4 +1748,3 @@ select {
   padding: 1px 4px;
 }
 .room-social-msg { color: var(--ink); flex: 1 1 auto; }
-.room-social-target { font-size: 10px; color: var(--muted); font-weight: 700; }
