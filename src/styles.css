@@ -1733,10 +1733,15 @@ select {
   font-size: 12px;
   line-height: 1.4;
   display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 5px;
+  flex-direction: column;
+  gap: 3px;
   box-shadow: 1px 1px 0 rgba(0, 0, 0, 0.18);
+}
+.room-social-header {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  flex-wrap: wrap;
 }
 .room-social-who { font-weight: 800; }
 .room-social-kind {
@@ -1747,4 +1752,5 @@ select {
   border-radius: 4px;
   padding: 1px 4px;
 }
-.room-social-msg { color: var(--ink); flex: 1 1 auto; }
+.room-social-target { font-weight: 800; }
+.room-social-msg { color: var(--ink); }
