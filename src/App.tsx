@@ -1890,7 +1890,7 @@ function RoomContent({
           type="button"
           className={`btn room-social-toggle${socialChatEnabled ? ' primary' : ''}`}
           onClick={() => onToggleSocialChat(!socialChatEnabled)}
-          title="自由社交聊天（嘴炮/结盟/威胁）总开关。默认关；开启会按事件触发额外 LLM 调用，关系账本不受影响。"
+          title="自由社交聊天（嘴炮/结盟/威胁）总开关。默认开；开启会按事件触发额外 LLM 调用，关系账本不受影响。"
         >
           社交{socialChatEnabled ? '：开' : '：关'}
         </button>
@@ -1898,12 +1898,12 @@ function RoomContent({
       <RelationshipMatrix relationships={relationships} players={players} />
       <div className="room-social-stream event-feed">
         {reversed.length === 0 ? (
-          <p className="cost">社交聊天默认关闭。开启「社交聊天」后，AI 会就强盗、最长路、逼近胜利等事件互相喊话。</p>
+          <p className="cost">社交聊天默认开启。AI 会就强盗、最长路、逼近胜利等事件互相喊话；点「社交：关」可省 token。</p>
         ) : (
           reversed.map((ev, i) => (
             <div key={`${ev.ts}-${i}`} className="room-social-line">
-              <span className="room-social-who" style={{ color: PLAYER_ART_COLORS[ev.player] }}>
-                {ev.agentName ?? playerDisplayName(players, ev.player)}
+              <span className="room-social-who">
+                {playerDisplayName(players, ev.player)}
               </span>
               <span className="room-social-kind">{SOCIAL_KIND_LABEL[ev.kind] ?? ev.kind}</span>
               <span className="room-social-msg">{ev.message}</span>

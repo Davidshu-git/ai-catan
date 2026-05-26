@@ -112,7 +112,7 @@ const DEFAULT_ROOM = 'default'; // MVP：单房间
 const AI_PROVIDER = normalizeProviderName(process.env.AI_PROVIDER ?? 'qwen36'); // rule | mock | <注册表里的模型 key>，见 llm/modelRegistry.ts
 const DEFAULT_AI_AUTOPLAY = process.env.AI_AUTOPLAY === '1'; // 默认手动，便于观察 AI 单步决策
 const DEFAULT_AI_HINT = process.env.LLM_HINT !== '0'; // LLM prompt 默认带空间动作 hint；=0 关闭
-const DEFAULT_SOCIAL_CHAT = process.env.SOCIAL_CHAT === '1'; // 自由社交聊天默认关，防 token 失控；=1 默认开
+const DEFAULT_SOCIAL_CHAT = process.env.SOCIAL_CHAT !== '0'; // 自由社交聊天默认开；=0 显式关闭以省 token
 const PLAYER_MODE = (process.env.PLAYER_MODE ?? 'all-ai').toLowerCase(); // all-ai | human0
 
 /** provider 字符串归一到稳定 key（rule/mock/注册表模型 key）；细节见 modelRegistry.resolveProviderKey */

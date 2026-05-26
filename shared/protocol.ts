@@ -155,7 +155,7 @@ export interface AiControlState {
   /** 各 AI 席位的角色策略提示词（即 LLM prompt 内 agent.personality 字段）；前端用作悬浮提示 */
   agentPersonalities: Record<number, string>;
   /**
-   * 自由社交聊天（嘴炮/结盟/威胁）总开关。默认关；前端可通过 set_social_chat 实时熄火。
+   * 自由社交聊天（嘴炮/结盟/威胁）总开关。默认开；前端可通过 set_social_chat 实时熄火。
    * 关闭时不触发任何社交 LLM 调用，是防 token 失控的实时刹车。关系账本（确定性、零 LLM）不受影响。
    */
   socialChatEnabled: boolean;
