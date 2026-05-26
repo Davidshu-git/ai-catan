@@ -1134,9 +1134,15 @@ function MainActions({
   humanTradeState: HumanTradeStateEvent;
   connected: boolean;
 }) {
-  const { state } = game;
+  const { board, state } = game;
   const me = state.players[seat];
   const afford = (c: Partial<ResMap>) => RESOURCES.every((r) => me.resources[r] >= (c[r] ?? 0));
+  const [bankOpen, setBankOpen] = useState(false);
+  const [bankGive, setBankGive] = useState<Resource>('木');
+  const [bankRecv, setBankRecv] = useState<Resource>('矿');
+  const bankRatio = tradeRatio(board, state, seat, bankGive);
+  const bankOk =
+    bankGive !== bankRecv && me.resources[bankGive] >= bankRatio && state.bank[bankRecv] > 0;
 
   return (
     <>
@@ -1170,17 +1176,49 @@ function MainActions({
           >
             发展
           </button>
+          <button
+            className={`btn${bankOpen ? ' primary' : ''}`}
+            onClick={() => setBankOpen((o) => !o)}
+          >
+            兑换
+          </button>
         </div>
         {mode && (
           <p className="cost" style={{ marginTop: 8 }}>
             已进入「{mode === 'road' ? '修路' : mode === 'settlement' ? '建房屋' : '升级城市'}」模式，点击棋盘上的高亮位置。再次点击按钮取消。
           </p>
         )}
+        {bankOpen && (
+          <div className="bank-trade-row" style={{ marginTop: 8 }}>
+            <select value={bankGive} onChange={(e) => setBankGive(e.target.value as Resource)}>
+              {RESOURCES.map((r) => (
+                <option key={r} value={r}>
+                  {RESOURCE_LABEL[r]}
+                </option>
+              ))}
+            </select>
+            <span>×{bankRatio} →</span>
+            <select value={bankRecv} onChange={(e) => setBankRecv(e.target.value as Resource)}>
+              {RESOURCES.map((r) => (
+                <option key={r} value={r}>
+                  {RESOURCE_LABEL[r]}
+                </option>
+              ))}
+            </select>
+            <button
+              className="btn bank-trade-submit"
+              disabled={!bankOk}
+              onClick={() =>
+                dispatch({ type: 'BANK_TRADE', give: bankGive, receive: bankRecv })
+              }
+            >
+              确认
+            </button>
+          </div>
+        )}
       </div>
 
       <DevCards state={state} seat={seat} dispatch={dispatch} />
-
-      <BankTrade game={game} seat={seat} dispatch={dispatch} />
 
       <HumanNegotiation
         game={game}
@@ -1188,11 +1226,8 @@ function MainActions({
         humanTradeState={humanTradeState}
         connected={connected}
         flash={flash}
+        onEndTurn={() => dispatch({ type: 'END_TURN' })}
       />
-
-      <button className="btn warn" onClick={() => dispatch({ type: 'END_TURN' })}>
-        结束回合
-      </button>
     </>
   );
 }
@@ -1310,54 +1345,6 @@ function DevCards({
   );
 }
 
-// ---------- 银行交易 ----------
-
-function BankTrade({
-  game,
-  seat,
-  dispatch,
-}: {
-  game: FullGame;
-  seat: number;
-  dispatch: (a: Action) => void;
-}) {
-  const { board, state } = game;
-  const [give, setGive] = useState<Resource>('木');
-  const [recv, setRecv] = useState<Resource>('矿');
-  const ratio = tradeRatio(board, state, seat, give);
-  const me = state.players[seat];
-  const ok = give !== recv && me.resources[give] >= ratio && state.bank[recv] > 0;
-
-  return (
-    <div className="card">
-      <div className="tag-row" style={{ alignItems: 'center' }}>
-        <select value={give} onChange={(e) => setGive(e.target.value as Resource)}>
-          {RESOURCES.map((r) => (
-            <option key={r} value={r}>
-              {RESOURCE_LABEL[r]}
-            </option>
-          ))}
-        </select>
-        <span>×{ratio} →</span>
-        <select value={recv} onChange={(e) => setRecv(e.target.value as Resource)}>
-          {RESOURCES.map((r) => (
-            <option key={r} value={r}>
-              {RESOURCE_LABEL[r]}
-            </option>
-          ))}
-        </select>
-        <button
-          className="btn"
-          disabled={!ok}
-          onClick={() => dispatch({ type: 'BANK_TRADE', give, receive: recv })}
-        >
-          兑换
-        </button>
-      </div>
-    </div>
-  );
-}
-
 // ---------- 真人交互谈判 ----------
 
 function HumanNegotiation({
@@ -1367,6 +1354,7 @@ function HumanNegotiation({
   connected,
   flash,
   dock = false,
+  onEndTurn,
 }: {
   game: FullGame;
   seat: number;
@@ -1374,6 +1362,7 @@ function HumanNegotiation({
   connected: boolean;
   flash: (m: string) => void;
   dock?: boolean;
+  onEndTurn?: () => void;
 }) {
   const { state } = game;
   const me = state.players[seat];
@@ -1449,6 +1438,16 @@ function HumanNegotiation({
 
   return (
     <div className={`card human-negotiation${dock ? ' trade-chat-dock' : ''}`}>
+      {onEndTurn && (
+        <button
+          type="button"
+          className="btn warn end-turn-mini"
+          onClick={onEndTurn}
+          title="结束本回合"
+        >
+          结束回合
+        </button>
+      )}
       {activeMine ? (
         <>
           <div className="trade-limits human-trade-limits">
@@ -1537,39 +1536,30 @@ function HumanNegotiation({
           ))}
         </div>
       </details>
-      <textarea
-        className="human-trade-text"
-        value={message}
-        disabled={busy || !connected || Boolean(maxed)}
-        placeholder={activeMine ? '继续喊话或改价' : '发起喊话或报价'}
-        onChange={(e) => setMessage(e.target.value)}
-      />
-      <div className="human-trade-actions">
+      <div className="human-trade-row">
+        <textarea
+          className="human-trade-text"
+          value={message}
+          disabled={busy || !connected || Boolean(maxed)}
+          placeholder={activeMine ? '继续喊话或改价' : '发起喊话或报价'}
+          onChange={(e) => setMessage(e.target.value)}
+          rows={1}
+        />
         <button
-          className="btn"
+          className="btn human-trade-submit"
           disabled={busy || !connected || Boolean(maxed)}
           onClick={() => submit(activeMine ? 'say' : 'start')}
         >
           {busy ? '等待回应…' : activeMine ? '发送' : '发起'}
         </button>
-        {activeMine ? (
+      </div>
+      {activeMine && (
+        <div className="human-trade-actions">
           <button className="btn warn" disabled={pending || !connected} onClick={endTrade}>
             结束谈判
           </button>
-        ) : (
-          <button
-            className="btn"
-            disabled={busy}
-            onClick={() => {
-              setGive(emptyRes());
-              setRecv(emptyRes());
-              setMessage('');
-            }}
-          >
-            清空
-          </button>
-        )}
-      </div>
+        </div>
+      )}
       {maxed && <p className="cost">本轮谈判发言次数已用完，可以成交或结束谈判。</p>}
     </div>
   );
