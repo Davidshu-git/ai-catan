@@ -95,6 +95,45 @@ function hasPlayerRoadOrBuildingAt(b: Board, s: GameState, vertexId: number, pla
   );
 }
 
+/**
+ * 我现有路网（房屋/城市顶点 + 已有路的两端）"再修一条桥接路即可建房屋"的目标顶点集合。
+ * roadHint 用它来识别"隔点候选目标已经能 1 步达"的重复修路场景 ——
+ * 典型如 setup 阶段两个 settlement 都指向同一个最佳发展点，第二条路其实是冗余。
+ */
+function oneStepBuildTargetsFromExistingNetwork(
+  b: Board,
+  s: GameState,
+  player: number,
+): Set<number> {
+  const networkVerts = new Set<number>();
+  for (const [vStr, bld] of Object.entries(s.buildings)) {
+    if (bld.owner === player) networkVerts.add(Number(vStr));
+  }
+  for (const [eStr, road] of Object.entries(s.roads)) {
+    if (road.owner !== player) continue;
+    const edge = b.edges[Number(eStr)];
+    if (edge) {
+      networkVerts.add(edge.v1);
+      networkVerts.add(edge.v2);
+    }
+  }
+  const targets = new Set<number>();
+  for (const vid of networkVerts) {
+    const v = b.vertices[vid];
+    if (!v) continue;
+    for (const n of v.neighbors) {
+      if (networkVerts.has(n)) continue;
+      if (s.buildings[n]) continue;
+      const e = edgeBetween(b, vid, n);
+      if (!e || s.roads[e.id]) continue;
+      const after = stateWithRoad(s, e.id, player);
+      if (!canBuildSettlement(b, after, n, player)) continue;
+      targets.add(n);
+    }
+  }
+  return targets;
+}
+
 function describeBuildTarget(b: Board, vertexId: number): string {
   const tiles = describeVertexTiles(b, vertexId);
   const sum = vertexYieldPointSum(b, vertexId);
@@ -302,6 +341,9 @@ export function roadHint(b: Board, s: GameState, edgeId: number, currentPlayer: 
     .filter((vid) => !buildingAt(s, vid) && canBuildSettlement(b, afterRoad, vid, currentPlayer))
     .map((vid) => describeBuildTarget(b, vid));
 
+  // 自查：本路"隔点候选"目标若已被现有路网（不含本候选）1 步可达，则本路对该目标重复
+  const existingOneStep = oneStepBuildTargetsFromExistingNetwork(b, s, currentPlayer);
+
   const oneMore = new Map<number, string>();
   for (const from of frontierEnds) {
     for (const to of b.vertices[from]?.neighbors ?? []) {
@@ -311,7 +353,10 @@ export function roadHint(b: Board, s: GameState, edgeId: number, currentPlayer: 
       if (!canBuildRoad(b, afterRoad, nextEdge.id, currentPlayer)) continue;
       const afterSecondRoad = stateWithRoad(afterRoad, nextEdge.id, currentPlayer);
       if (!canBuildSettlement(b, afterSecondRoad, to, currentPlayer)) continue;
-      oneMore.set(to, `经 v${from} 再修 e${nextEdge.id} 到 ${describeBuildTarget(b, to)}`);
+      const redundant = existingOneStep.has(to)
+        ? '（⚠️ 既有路网 1 步可达，本路对此目标重复）'
+        : '';
+      oneMore.set(to, `经 v${from} 再修 e${nextEdge.id} 到 ${describeBuildTarget(b, to)}${redundant}`);
     }
   }
 
