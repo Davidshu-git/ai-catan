@@ -1420,14 +1420,6 @@ function HumanNegotiation({
     if (!res.ok) flash(res.reason ?? '这笔交易暂时无法成交');
   };
 
-  const endTrade = async () => {
-    setPending(true);
-    const res = await emitAck('human_trade_end', undefined);
-    setPending(false);
-    if (!res.ok) flash(res.reason ?? '结束谈判失败');
-    else flash('谈判已结束');
-  };
-
   const busy = pending || humanTradeState.busy === true;
   const activeMine = humanTradeState.active && humanTradeState.initiator === seat;
   const maxed =
@@ -1553,14 +1545,7 @@ function HumanNegotiation({
           {busy ? '等待回应…' : activeMine ? '发送' : '发起'}
         </button>
       </div>
-      {activeMine && (
-        <div className="human-trade-actions">
-          <button className="btn warn" disabled={pending || !connected} onClick={endTrade}>
-            结束谈判
-          </button>
-        </div>
-      )}
-      {maxed && <p className="cost">本轮谈判发言次数已用完，可以成交或结束谈判。</p>}
+      {maxed && <p className="cost">本轮谈判发言次数已用完，请点击成交或结束本回合。</p>}
     </div>
   );
 }

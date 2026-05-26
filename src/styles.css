@@ -1423,15 +1423,6 @@ select {
   align-self: stretch;
 }
 
-.human-trade-actions {
-  display: flex;
-  gap: 8px;
-}
-
-.human-trade-actions .btn {
-  flex: 1 1 auto;
-}
-
 .hint {
   background: #d7d0ad;
   border: 2px solid var(--line);
