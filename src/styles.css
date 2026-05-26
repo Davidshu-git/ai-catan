@@ -1091,20 +1091,18 @@ select {
   border-radius: 0 5px 5px 0;
 }
 
+/* 状态边色仍按结果区分（细 3px 竖条），但卡背景保持与日志面板一致的羊皮纸基色 */
 .trade-session.is-accepted {
   border-left-color: var(--good);
-  background: rgba(82, 107, 59, 0.16);
 }
 
 .trade-session.is-rejected,
 .trade-session.is-expired {
   border-left-color: var(--warn);
-  background: rgba(181, 150, 69, 0.16);
 }
 
 .trade-session.is-invalid {
   border-left-color: var(--bad);
-  background: rgba(143, 46, 41, 0.13);
 }
 
 .trade-session-head,
