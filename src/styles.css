@@ -1585,6 +1585,26 @@ select {
 
 .modal h2 { font-size: 28px; margin-bottom: 12px; color: var(--accent-d); }
 .modal p { color: var(--muted); margin-bottom: 20px; line-height: 1.7; font-weight: 700; }
+.modal-actions { display: flex; gap: 10px; justify-content: center; }
+
+/* 结算弹窗被「查看记录」关掉后，右上角浮一个小 chip，点回来重开弹窗 */
+.game-over-chip {
+  position: fixed;
+  top: 12px;
+  right: 12px;
+  z-index: 60;
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(155, 63, 52, 0.55);
+  background: var(--accent, #9b3f34);
+  color: #fff;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+}
+.game-over-chip:hover { background: var(--accent-d, #7a2f26); }
 
 .confetti-piece {
   position: absolute;

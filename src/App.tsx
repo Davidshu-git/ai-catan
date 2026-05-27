@@ -329,6 +329,8 @@ export function App() {
   const [gameElapsedMs, setGameElapsedMs] = useState(0);
   const [sidebarWidth, setSidebarWidth] = useState<number>(readStoredSidebarWidth);
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>('thoughts');
+  // gameOver modal 可临时关闭以便观众回看记录；winner 变化时（开新局）自动复位为可见
+  const [gameOverDismissed, setGameOverDismissed] = useState(false);
   const draggingRef = useRef(false);
   const aiStepAckedRef = useRef(false);
   const aiStepSawWorkRef = useRef(false);
@@ -692,6 +694,11 @@ export function App() {
     return () => clearTimeout(t);
   }, [aiFocus?.ts]);
 
+  // gameOver dismissed 状态在新局开始时复位：phase 离开 gameOver 即可
+  useEffect(() => {
+    if (game?.state.phase !== 'gameOver') setGameOverDismissed(false);
+  }, [game?.state.phase]);
+
   // ⚠️ 所有 hook 必须在 early return 之前调用（Rules of Hooks）
   const state = game?.state;
   const activeHumanSeat = useMemo(() => humanActionSeat(state), [state]);
@@ -839,7 +846,7 @@ export function App() {
 
       {toast && <div className="toast">{toast}</div>}
 
-      {state.phase === 'gameOver' && state.winner != null && (
+      {state.phase === 'gameOver' && state.winner != null && !gameOverDismissed && (
         <div className="modal-bg">
           <Confetti />
           <div className="modal">
@@ -849,11 +856,30 @@ export function App() {
               <br />
               再来一局？
             </p>
-            <button className="btn primary" onClick={newGame}>
-              开始新游戏
-            </button>
+            <div className="modal-actions">
+              <button
+                className="btn"
+                onClick={() => setGameOverDismissed(true)}
+                title="关掉这个弹窗，回看本局思考流 / 交易 / 社交记录"
+              >
+                查看记录
+              </button>
+              <button className="btn primary" onClick={newGame}>
+                开始新游戏
+              </button>
+            </div>
           </div>
         </div>
+      )}
+      {state.phase === 'gameOver' && state.winner != null && gameOverDismissed && (
+        <button
+          type="button"
+          className="game-over-chip"
+          onClick={() => setGameOverDismissed(false)}
+          title="重新打开结算弹窗"
+        >
+          🏆 {playerDisplayName(state.players, state.winner)} 获胜
+        </button>
       )}
     </div>
   );
