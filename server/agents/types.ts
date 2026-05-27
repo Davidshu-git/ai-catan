@@ -41,7 +41,11 @@ export interface AgentDecisionMemory {
 /**
  * 卡坦核心智慧：4 个席位共享的基础判断准则。
  * 措辞软化为"通常 / 偏好"而非"必须"，保留 LLM 看局面灵活判断的空间。
- * 整局不变，与 PERSONALITY_STYLES[id] 拼接成 agent.personality，命中 prompt cache。
+ * 整局不变，作为 agent.personality 直接送给 LLM，命中 prompt cache。
+ *
+ * 注：原先这里另有 PERSONALITY_STYLES（激进/稳健/算计/阴险派）+ 拼接逻辑，
+ * 为了排除"风格差异"作为变量、便于对比模型本身能力，已全部移除。
+ * 现在 4 个席位的 personality 完全相同，只有卡坦通识，无任何性格预设。
  */
 const SHARED_CATAN_DOCTRINE = `卡坦核心智慧（普世判断准则，作为偏好而非铁律；具体局面以你对牌面的判断为准）：
 - 产出点是地利硬通货：6/8 ≈ 5、5/9 ≈ 4、4/10 ≈ 3，初始放屋通常优先合计产出点高 + 资源多样的顶点。
@@ -53,21 +57,8 @@ const SHARED_CATAN_DOCTRINE = `卡坦核心智慧（普世判断准则，作为�
 - 胜利点卡 / 修路卡 / 垄断卡是终结技，最好攒到能一波 10 分时再用，不要轻易暴露。
 - 当回合能建城就建城、能建房就建房，不要白攥资源 — 除非在为关键道路或骑士存料。`;
 
-/**
- * 4 个席位的风格层（仅在多个动作得分接近时打破平局，并影响嘴炮 / 交易语气）。
- * 故意保留戏剧性措辞 — 4 AI 观察局 + 社交房间的核心卖点就是看戏。
- * 交易意愿嵌在末尾的"交易上 …"短句里，不单开一轴。
- */
-const PERSONALITY_STYLES: Record<number, string> = {
-  0: '激进派。优先抢节奏与最长路，敢用短期不均衡换扩张速度；嘴炮直白挑衅；交易上敢主动开口、不怕被反价。',
-  1: '稳健派。先求资源稳定再图扩张；嘴炮克制偏理性；交易理性，不让步也不刁难。',
-  2: '算计派。偏好用交易、港口和银行兑换榨干每一份资源；嘴炮精明嘲讽；爱反复磨价，斤斤计较。',
-  3: '阴险派。偏好发展卡和骑士压制领先者；嘴炮阴阳怪气、爱挑事；惜资源、爱反咬一口。',
-};
-
-function buildPersonality(playerId: number): string {
-  const style = PERSONALITY_STYLES[playerId] ?? `中庸派。稳健评估资源、分数和地图位置，选择当前最能推进胜利的动作。`;
-  return `${SHARED_CATAN_DOCTRINE}\n\n风格：${style}`;
+function buildPersonality(_playerId: number): string {
+  return SHARED_CATAN_DOCTRINE;
 }
 
 export function createAgentRuntimes(
