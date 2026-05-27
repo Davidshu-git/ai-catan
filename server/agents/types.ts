@@ -22,11 +22,15 @@ export interface AiAgentRuntime {
   /** 较慢变化的长期策略阶段 */
   stance?: string;
   /**
-   * thinking 模式覆盖（仅决策路径生效）。undefined = 用 spec.enableThinking 默认。
-   * 前端「玩家卡 provider 标签点一下」切换这一字段。
+   * thinking 模式（仅决策路径生效，交易/社交 LLM 不受影响）。
+   * - 'on' / 'off': 强制开 / 关
+   * - 'auto': 走 server/llm/thinkingPolicy.ts 的 phase 策略
+   * 前端「玩家卡 thinking 下拉」切换；默认 'auto'。
    */
-  thinking?: boolean;
+  thinkingMode: ThinkingMode;
 }
+
+export type ThinkingMode = 'auto' | 'on' | 'off';
 
 export interface AgentDecisionMemory {
   phase: Phase;
@@ -80,6 +84,7 @@ export function createAgentRuntimes(
       personality: buildPersonality(p.id),
       memory: [],
       decisionCount: 0,
+      thinkingMode: 'auto',
     };
   }
   return agents;

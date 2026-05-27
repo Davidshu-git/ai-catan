@@ -157,11 +157,15 @@ export interface AiControlState {
   /**
    * 各 AI 席位的 thinking 模式状态。
    * - supported=true 表示该 provider 是注册表里的 LLM（rule/mock 都是 false）
-   * - enabled 是有效值：agent 覆盖值优先，无覆盖则取 spec.enableThinking
-   * 仅影响该 agent 的决策路径（buildProvider→createQwenProvider/createLlmProvider）；
-   * 交易/社交 LLM 仍读 spec 默认，不随 agent 覆盖。
+   * - mode='auto' 走 server/llm/thinkingPolicy.ts（setup1/setup2/moveRobber/steal 才开）
+   * - mode='on' / 'off' 强制
+   * - effective 是当前 phase 下 mode 的实际取值（auto 时已经被 policy 解析过）
+   * 仅影响该 agent 的决策路径（buildProvider→adapter）；交易/社交 LLM 仍读 spec 默认。
    */
-  thinkingByPlayer: Record<number, { enabled: boolean; supported: boolean }>;
+  thinkingByPlayer: Record<
+    number,
+    { mode: 'auto' | 'on' | 'off'; effective: boolean; supported: boolean }
+  >;
   /**
    * 自由社交聊天（嘴炮/结盟/威胁）总开关。默认开；前端可通过 set_social_chat 实时熄火。
    * 关闭时不触发任何社交 LLM 调用，是防 token 失控的实时刹车。关系账本（确定性、零 LLM）不受影响。

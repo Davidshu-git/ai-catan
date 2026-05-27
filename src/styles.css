@@ -509,19 +509,44 @@ body {
   line-height: 15px;
   font-family: inherit;
 }
-.player-provider-tag.clickable {
-  cursor: pointer;
-}
-.player-provider-tag.clickable:hover:not(:disabled) {
-  background: rgba(155, 63, 52, 0.22);
-}
+/* effective=on（不管 mode 是 on 还是 auto 命中），背景变深红 */
 .player-provider-tag.thinking-on {
   color: #fff;
   background: rgba(155, 63, 52, 0.78);
   border-color: rgba(155, 63, 52, 0.92);
 }
-.player-provider-tag:disabled {
-  opacity: 0.6;
+/* thinking 下拉：复用「脑」下拉的"透明 select 覆盖可见标签"模式
+   可见标签是 model 名（dsf/dsp/qwen），点击展开 select 选 auto/on/off */
+.thinking-tag-wrap {
+  position: relative;
+  display: inline-block;
+}
+.thinking-tag-select {
+  appearance: none;
+  -webkit-appearance: none;
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  opacity: 0;
+  cursor: pointer;
+  font: inherit;
+  border: none;
+}
+.thinking-tag-select:disabled {
+  cursor: not-allowed;
+}
+.thinking-tag-select option {
+  color: var(--ink, #2b1d1d);
+  background: var(--paper, #fff);
+}
+.thinking-tag-label {
+  display: inline-block;
+}
+.thinking-tag-wrap:hover .thinking-tag-label:not(.thinking-on) {
+  background: rgba(155, 63, 52, 0.22);
+}
+.thinking-tag-select:disabled + .thinking-tag-label {
+  opacity: 0.55;
 }
 
 .player-resources {

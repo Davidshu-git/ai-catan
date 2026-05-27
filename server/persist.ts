@@ -18,7 +18,7 @@ import type {
   TradeChatStartedEvent,
 } from '../shared/protocol';
 import type { FullGame } from '../shared/types';
-import type { AiAgentRuntime } from './agents/types';
+import type { AiAgentRuntime, ThinkingMode } from './agents/types';
 import type { RelationshipLedger } from './social/relationshipLedger';
 
 export const SNAPSHOT_SCHEMA_VERSION = 1;
@@ -39,7 +39,9 @@ export interface AgentSnapshot {
   providerName: string;
   currentTurnGoal?: string;
   stance?: string;
-  /** undefined 表示无覆盖，沿用 spec 默认 */
+  /** 'auto' | 'on' | 'off'；老快照可能没有此字段，restore 时会迁移自旧 thinking 布尔 */
+  thinkingMode?: ThinkingMode;
+  /** @deprecated 旧字段；restore 时映射到 thinkingMode 后丢弃 */
   thinking?: boolean;
 }
 
@@ -106,7 +108,7 @@ function agentSnapshot(agent: AiAgentRuntime): AgentSnapshot {
     providerName: agent.providerName,
     currentTurnGoal: agent.currentTurnGoal,
     stance: agent.stance,
-    thinking: agent.thinking,
+    thinkingMode: agent.thinkingMode,
   };
 }
 

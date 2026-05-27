@@ -420,8 +420,8 @@ export function App() {
     socket.emit('set_ai_provider', { player: playerId, provider });
   }, []);
 
-  const setAiThinking = useCallback((playerId: number, enabled: boolean) => {
-    socket.emit('set_ai_thinking', { player: playerId, enabled });
+  const setAiThinking = useCallback((playerId: number, mode: 'auto' | 'on' | 'off') => {
+    socket.emit('set_ai_thinking', { player: playerId, mode });
   }, []);
 
   const finishAiStepTimer = useCallback((ok: boolean) => {
@@ -933,7 +933,7 @@ function Players({
   providerOptions: AiControlState['providerOptions'];
   connected: boolean;
   onSetProvider: (playerId: number, provider: string) => void;
-  onSetThinking: (playerId: number, enabled: boolean) => void;
+  onSetThinking: (playerId: number, mode: 'auto' | 'on' | 'off') => void;
 }) {
   const { board, state } = game;
   const prevResourcesRef = useRef<Record<number, ResMap>>(
@@ -1032,23 +1032,39 @@ function Players({
                 {pl.isAI && (() => {
                   const thinking = thinkingByPlayer[pl.id];
                   const supported = thinking?.supported ?? false;
-                  const enabled = thinking?.enabled ?? false;
+                  const label = providerShortLabel(agentProviders[pl.id]);
+                  if (!supported) {
+                    // rule/mock/真人 没有 thinking 概念，保持静态 provider 标签
+                    return <span className="player-provider-tag">{label}</span>;
+                  }
+                  const mode = thinking!.mode;
+                  const effective = thinking!.effective;
+                  const title =
+                    mode === 'auto'
+                      ? `thinking 自动：当前 phase ${effective ? '会开' : '不开'}（setup1/setup2/moveRobber/steal 才开）`
+                      : mode === 'on'
+                        ? 'thinking 强制开（更慢但更准）'
+                        : 'thinking 强制关（更快）';
                   return (
-                    <button
-                      type="button"
-                      className={`player-provider-tag${supported ? ' clickable' : ''}${enabled ? ' thinking-on' : ''}`}
-                      disabled={!supported || !connected}
-                      onClick={supported ? () => onSetThinking(pl.id, !enabled) : undefined}
-                      title={
-                        !supported
-                          ? '该 provider 不支持 thinking 切换'
-                          : enabled
-                            ? '点击关闭 thinking 模式（更快）'
-                            : '点击开启 thinking 模式（更慢但更准）'
-                      }
-                    >
-                      {providerShortLabel(agentProviders[pl.id])}
-                    </button>
+                    <span className="thinking-tag-wrap" title={title}>
+                      <select
+                        className="thinking-tag-select"
+                        value={mode}
+                        disabled={!connected}
+                        onChange={(e) => onSetThinking(pl.id, e.target.value as 'auto' | 'on' | 'off')}
+                        aria-label={`${label} thinking 模式`}
+                      >
+                        <option value="auto">自动</option>
+                        <option value="on">think开</option>
+                        <option value="off">think关</option>
+                      </select>
+                      <span
+                        className={`player-provider-tag thinking-tag-label${effective ? ' thinking-on' : ''}`}
+                        aria-hidden="true"
+                      >
+                        {label}
+                      </span>
+                    </span>
                   );
                 })()}
                 {state.current === pl.id && processingMs != null && (

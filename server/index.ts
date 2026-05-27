@@ -22,7 +22,7 @@ import { Server, type Socket } from 'socket.io';
 import { createGame } from '../shared/state';
 import { reduce, type Action } from '../shared/reducer';
 import { aiAcceptsTrade } from '../shared/ai';
-import { RESOURCES, type FullGame, type GameState, type ResMap } from '../shared/types';
+import { RESOURCES, type FullGame, type GameState, type Phase, type ResMap } from '../shared/types';
 import type {
   AiControlState,
   AiModelContextEvent,
@@ -48,7 +48,9 @@ import {
   rememberAgentDecision,
   toAgentPromptContext,
   type AiAgentRuntime,
+  type ThinkingMode,
 } from './agents/types';
+import { autoThinkingEnabled } from './llm/thinkingPolicy';
 import {
   createAiTradeLedger,
   maybeRunAiNegotiation,
@@ -200,7 +202,14 @@ function restoreSession(snap: SessionSnapshot): Session {
         : agent.memory.length;
     agent.currentTurnGoal = saved.currentTurnGoal;
     agent.stance = saved.stance;
-    agent.thinking = typeof saved.thinking === 'boolean' ? saved.thinking : undefined;
+    // 向后兼容：老快照只有 thinking: boolean，没有 thinkingMode
+    if (saved.thinkingMode === 'auto' || saved.thinkingMode === 'on' || saved.thinkingMode === 'off') {
+      agent.thinkingMode = saved.thinkingMode;
+    } else if (typeof saved.thinking === 'boolean') {
+      agent.thinkingMode = saved.thinking ? 'on' : 'off';
+    } else {
+      agent.thinkingMode = 'auto';
+    }
   }
   return {
     game,
@@ -381,13 +390,15 @@ function getAiControlState(session: Session): AiControlState {
   const currentAgent = getDecisionAgent(session);
   const agentProviders: Record<number, string> = {};
   const agentPersonalities: Record<number, string> = {};
-  const thinkingByPlayer: Record<number, { enabled: boolean; supported: boolean }> = {};
+  const thinkingByPlayer: AiControlState['thinkingByPlayer'] = {};
+  const currentPhase = session.game.state.phase;
   for (const agent of Object.values(session.agents)) {
     agentProviders[agent.playerId] = agent.providerName;
     agentPersonalities[agent.playerId] = agent.personality;
-    const effective = agentEffectiveThinking(agent.providerName, agent.thinking);
+    const effective = agentEffectiveThinking(agent.providerName, agent.thinkingMode, currentPhase);
     thinkingByPlayer[agent.playerId] = {
-      enabled: effective ?? false,
+      mode: agent.thinkingMode,
+      effective: effective ?? false,
       supported: effective !== null,
     };
   }
@@ -428,6 +439,9 @@ function applyAction(io: Server, roomId: string, action: Action) {
   // 关系账本：捕捉强盗/最长路/最大军队/逼近胜利等敌意信号（不推断成交）
   const relEvents = applyTransition(session.relationships, session.game.board, prev, next);
   broadcastState(io, roomId);
+  // phase 可能变了（如 main→roll→discard→moveRobber→steal→main）；ai_control_state 的
+  // thinkingByPlayer.effective 依赖当前 phase，phase 跳变后必须重算广播让前端看到 auto 模式生效区间。
+  if (prev.phase !== next.phase) emitAiControl(io, roomId, session);
   saveSessionSoon(roomId, session);
   // 社交发言（旁路、异步、受开关/预算约束）；applyAction 为同步，故 fire-and-forget
   void runSocial(io, roomId, session, relEvents);
@@ -886,11 +900,22 @@ function buildProvider(
   });
 }
 
-/** agent thinking 模式有效值：override 优先，否则 spec 默认；非 LLM 返回 null */
-function agentEffectiveThinking(providerName: string, override: boolean | undefined): boolean | null {
+/**
+ * 解析 agent 的 thinking 模式到当前 phase 下的有效布尔值。
+ * - 非 LLM provider 返回 null（无 thinking 概念）
+ * - mode='on' / 'off' 直接返回
+ * - mode='auto' 走 thinkingPolicy
+ */
+function agentEffectiveThinking(
+  providerName: string,
+  mode: ThinkingMode,
+  phase: Phase,
+): boolean | null {
   const spec = findModel(resolveProviderKey(providerName));
   if (!spec) return null;
-  return override ?? spec.enableThinking;
+  if (mode === 'on') return true;
+  if (mode === 'off') return false;
+  return autoThinkingEnabled(phase);
 }
 
 // 事件驱动的 AI 驱动循环：每次 dispatch 后调用；非 AI 回合 / gameOver 自然停。
@@ -979,12 +1004,17 @@ function scheduleAI(
     }
 
     const agent = getDecisionAgent(session, game.state);
+    // 解析 thinking：on/off 直接；auto 走 phase 策略；非 LLM/无 agent → undefined（透传走 spec 默认）
+    const thinkingOverride =
+      agent != null
+        ? (agentEffectiveThinking(agent.providerName, agent.thinkingMode, game.state.phase) ?? undefined)
+        : undefined;
     const provider = buildProvider(
       agent?.providerName ?? session.aiProvider,
       game.board,
       game.state,
       session.aiHint,
-      agent?.thinking,
+      thinkingOverride,
     );
     let outcome: Awaited<ReturnType<typeof decideAiStep>> | null = null;
     let decisionError: unknown = null;
@@ -1294,23 +1324,24 @@ io.on('connection', (socket: Socket) => {
     },
   );
 
-  // 单席位 thinking 模式开关。enabled=null/undefined 表示清除覆盖、沿用 spec 默认。
+  // 单席位 thinking 模式切换：auto / on / off。
   // 只影响该 agent 决策路径（buildProvider→adapter）；交易/社交 LLM 仍读 spec 默认。
   socket.on(
     'set_ai_thinking',
-    (
-      payload: { player: number; enabled: boolean | null },
-      ack?: (r: { ok: boolean }) => void,
-    ) => {
+    (payload: { player: number; mode: ThinkingMode }, ack?: (r: { ok: boolean }) => void) => {
       const s = getSession(DEFAULT_ROOM);
       const agent = s.agents[payload.player];
       if (!agent) {
         ack?.({ ok: false });
         return;
       }
-      agent.thinking = payload.enabled == null ? undefined : Boolean(payload.enabled);
-      // 同 set_ai_hint：仅影响后续决策；正在飞行的决策返回后照常使用，
-      // 因为 thinking 切换不会破坏合法性，只改延迟/质量。
+      const mode = payload.mode;
+      if (mode !== 'auto' && mode !== 'on' && mode !== 'off') {
+        ack?.({ ok: false });
+        return;
+      }
+      agent.thinkingMode = mode;
+      // 同 set_ai_hint：仅影响后续决策；正在飞行的决策返回后照常使用（thinking 切换不破坏合法性）。
       emitAiControl(io, DEFAULT_ROOM, s);
       saveSessionSoon(DEFAULT_ROOM, s);
       ack?.({ ok: true });
