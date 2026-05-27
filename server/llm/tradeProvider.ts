@@ -521,7 +521,7 @@ export async function callLlm(providerName: string, system: string, user: string
     };
     // thinking 开关每家命名不同，详见 qwenProvider.callOpenAi
     if (prefix === 'qwen') reqBody.enable_thinking = spec.enableThinking;
-    else if (prefix === 'deepseek') reqBody.thinking = { type: spec.enableThinking ? 'enabled' : 'disabled' };
+    else if (prefix.startsWith('deepseek')) reqBody.thinking = { type: spec.enableThinking ? 'enabled' : 'disabled' };
     const resp = await fetch(url, {
       method: 'POST',
       signal: ctl.signal,

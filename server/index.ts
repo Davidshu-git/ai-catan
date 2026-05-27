@@ -200,6 +200,7 @@ function restoreSession(snap: SessionSnapshot): Session {
         : agent.memory.length;
     agent.currentTurnGoal = saved.currentTurnGoal;
     agent.stance = saved.stance;
+    agent.thinking = typeof saved.thinking === 'boolean' ? saved.thinking : undefined;
   }
   return {
     game,
@@ -380,9 +381,15 @@ function getAiControlState(session: Session): AiControlState {
   const currentAgent = getDecisionAgent(session);
   const agentProviders: Record<number, string> = {};
   const agentPersonalities: Record<number, string> = {};
+  const thinkingByPlayer: Record<number, { enabled: boolean; supported: boolean }> = {};
   for (const agent of Object.values(session.agents)) {
     agentProviders[agent.playerId] = agent.providerName;
     agentPersonalities[agent.playerId] = agent.personality;
+    const effective = agentEffectiveThinking(agent.providerName, agent.thinking);
+    thinkingByPlayer[agent.playerId] = {
+      enabled: effective ?? false,
+      supported: effective !== null,
+    };
   }
   return {
     autoplay: session.aiAutoplay,
@@ -395,6 +402,7 @@ function getAiControlState(session: Session): AiControlState {
     providerOptions: aiProviderOptions(),
     agentProviders,
     agentPersonalities,
+    thinkingByPlayer,
     currentAgent: currentAgent
       ? {
           player: currentAgent.playerId,
@@ -845,6 +853,7 @@ function buildProvider(
   board: FullGame['board'],
   state: GameState,
   useHint: boolean,
+  thinkingOverride?: boolean,
 ): AiDecisionProvider {
   const key = resolveProviderKey(name);
   if (key === 'mock') return createMockProvider();
@@ -863,8 +872,9 @@ function buildProvider(
     );
     return createRuleProvider(board, state);
   }
+  const enableThinking = thinkingOverride ?? spec.enableThinking;
   if (spec.api === 'anthropic') {
-    return createLlmProvider({ apiKey, host: spec.endpoint, model: spec.model, useHint });
+    return createLlmProvider({ apiKey, host: spec.endpoint, model: spec.model, useHint, enableThinking });
   }
   return createQwenProvider({
     apiKey,
@@ -872,8 +882,15 @@ function buildProvider(
     model: spec.model,
     useHint,
     labelPrefix: spec.labelPrefix ?? (spec.api === 'openai' ? 'qwen' : undefined),
-    enableThinking: spec.enableThinking,
+    enableThinking,
   });
+}
+
+/** agent thinking 模式有效值：override 优先，否则 spec 默认；非 LLM 返回 null */
+function agentEffectiveThinking(providerName: string, override: boolean | undefined): boolean | null {
+  const spec = findModel(resolveProviderKey(providerName));
+  if (!spec) return null;
+  return override ?? spec.enableThinking;
 }
 
 // 事件驱动的 AI 驱动循环：每次 dispatch 后调用；非 AI 回合 / gameOver 自然停。
@@ -967,6 +984,7 @@ function scheduleAI(
       game.board,
       game.state,
       session.aiHint,
+      agent?.thinking,
     );
     let outcome: Awaited<ReturnType<typeof decideAiStep>> | null = null;
     let decisionError: unknown = null;
@@ -1270,6 +1288,29 @@ io.on('connection', (socket: Socket) => {
       const s = getSession(DEFAULT_ROOM);
       s.aiHint = Boolean(payload.hint);
       // 仅影响后续 LLM 决策；正在进行的 LLM 调用结果不作废（hint 不改变状态合法性）
+      emitAiControl(io, DEFAULT_ROOM, s);
+      saveSessionSoon(DEFAULT_ROOM, s);
+      ack?.({ ok: true });
+    },
+  );
+
+  // 单席位 thinking 模式开关。enabled=null/undefined 表示清除覆盖、沿用 spec 默认。
+  // 只影响该 agent 决策路径（buildProvider→adapter）；交易/社交 LLM 仍读 spec 默认。
+  socket.on(
+    'set_ai_thinking',
+    (
+      payload: { player: number; enabled: boolean | null },
+      ack?: (r: { ok: boolean }) => void,
+    ) => {
+      const s = getSession(DEFAULT_ROOM);
+      const agent = s.agents[payload.player];
+      if (!agent) {
+        ack?.({ ok: false });
+        return;
+      }
+      agent.thinking = payload.enabled == null ? undefined : Boolean(payload.enabled);
+      // 同 set_ai_hint：仅影响后续决策；正在飞行的决策返回后照常使用，
+      // 因为 thinking 切换不会破坏合法性，只改延迟/质量。
       emitAiControl(io, DEFAULT_ROOM, s);
       saveSessionSoon(DEFAULT_ROOM, s);
       ack?.({ ok: true });

@@ -200,6 +200,7 @@ LLM prompt / hint 里的骰点概率权重统一叫**产出点**，不要再写�
 | C → S | `set_ai_autoplay` | `{autoplay: boolean}` + ack | 开关服务端 AI 自动连续推进；关闭时取消排队中的 AI 步骤，并让进行中的 LLM 决策返回后失效 |
 | C → S | `set_ai_hint` | `{hint: boolean}` + ack | 切换是否在 LLM prompt 里塞空间动作 hint（A/B 实验用）；仅影响 llm provider，rule/mock 忽略；不作废进行中的决策 |
 | C → S | `set_ai_provider` | `{player?, provider}` + ack | 切换单个 AI 或全体 AI 的 provider（rule / mock / 注册表里的模型 key，当前 = qwen36；前端按玩家独立切换）；`provider:'human'` 且带 `player` 时把该席位切为真人 |
+| C → S | `set_ai_thinking` | `{player, enabled: boolean\|null}` + ack | 单席位 thinking 模式覆盖；`null` 清除覆盖、沿用 spec 默认。仅影响该 agent 决策路径（buildProvider→adapter）；交易/社交 LLM 仍读 spec 默认。前端「玩家卡 provider 标签点一下」触发 |
 | C → S | `set_social_chat` | `{enabled: boolean}` + ack | 自由社交聊天（嘴炮/结盟/威胁）总开关；默认开（`SOCIAL_CHAT=0` 显式关），运行时实时熄火（生成中途被关即丢弃）；只管社交发言，关系账本不受影响 |
 | C → S | `step_ai` | ack | 手动推进一个 AI 动作；仅在当前有 AI 可行动且未 busy/queued 时成功 |
 | C → S | `human_trade_start` | `{give, receive, message?, participants?}` + ack | 真人发起多轮交互谈判，可仅喊话或带结构化报价 |
@@ -208,7 +209,7 @@ LLM prompt / hint 里的骰点概率权重统一叫**产出点**，不要再写�
 | C → S | `human_trade_end` | ack | 真人主动结束当前谈判 |
 | S → C | `ai_thought` | `AiThoughtEvent` | 一次 AI 决策的思考流（player/agentName/phase/thought/actionId/actionHint/action/modelContext/timing/provider/retries/status）；`action` 已通过 Maker-Checker，可用于前端棋盘高亮；`actionHint` 是最终选中动作的语义化情报；`modelContext` 展示完整模型输入 / Provider 输入；`timing` 展示服务端调用链路耗时 |
 | S → C | `ai_error` | `AiErrorEvent` | Provider 输出非法 / 调用失败时广播；重试过程的错误也会发，含 agentName；错误事件也可带 `modelContext` 与 `timing` 方便分析失败输入和耗时 |
-| S → C | `ai_control_state` | `AiControlState` | AI 控制状态（autoplay/queued/busy/canStep/hintEnabled/socialChatEnabled/provider/currentAgent/llmStats）；连接时与状态变化时广播；`llmStats` 是本次进程启动以来全部 LLM 调用（决策+交易+社交）累计的调用次数/输入输出 token/缓存命中，每次 LLM 调用完成都会增量广播，新局或服务端重启清零（不持久化） |
+| S → C | `ai_control_state` | `AiControlState` | AI 控制状态（autoplay/queued/busy/canStep/hintEnabled/socialChatEnabled/provider/currentAgent/llmStats/thinkingByPlayer）；连接时与状态变化时广播；`llmStats` 是本次进程启动以来全部 LLM 调用（决策+交易+社交）累计的调用次数/输入输出 token/缓存命中，每次 LLM 调用完成都会增量广播，新局或服务端重启清零（不持久化）；`thinkingByPlayer[id]={enabled,supported}` 给前端玩家卡显示 thinking 开关状态 |
 | S → C | `social_chat` | `SocialChatEvent` | 一条 AI 社交发言（player/agentName/trigger/target/kind/message/turn）；由强盗/最长路/最大军队/逼近胜利等事件触发，受开关+预算约束；连接时补拉最近 60 条 |
 | S → C | `relationship_state` | `RelationshipSnapshotEvent` | 关系账本扁平快照（各玩家对彼此的 trust/threat/debt）；连接时与每次社交跃迁后广播，供观察者「社交房间」面板可视化 |
 | S → C | `human_trade_state` | `HumanTradeStateEvent` | 真人谈判实时态（当前报价、AI 接受/还价候选、发言限流、busy）；连接时与每次变化广播 |

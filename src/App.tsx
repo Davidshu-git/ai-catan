@@ -217,6 +217,7 @@ const DEFAULT_AI_CONTROL: AiControlState = {
   providerOptions: [],
   agentProviders: {},
   agentPersonalities: {},
+  thinkingByPlayer: {},
   llmStats: {
     calls: 0,
     promptTokens: 0,
@@ -256,7 +257,9 @@ function readStoredSidebarWidth(): number {
 function normalizeProviderKey(provider: string | undefined): string {
   const p = (provider ?? '').toLowerCase();
   if (p === 'qwen' || p === 'qwen36' || p.startsWith('qwen(')) return 'qwen36';
-  if (p === 'deepseek' || p === 'ds' || p.startsWith('deepseek(')) return 'deepseek';
+  // 先匹配 deepseek-pro，避免被前缀更短的 deepseek 截获
+  if (p === 'deepseek-pro' || p === 'dsp' || p.startsWith('deepseek-pro(')) return 'deepseek-pro';
+  if (p === 'deepseek' || p === 'dsf' || p === 'ds' || p.startsWith('deepseek(')) return 'deepseek';
   if (p === 'mock') return 'mock';
   if (p === 'rule') return 'rule';
   if (p === 'human') return 'human';
@@ -271,6 +274,8 @@ function providerShortLabel(provider: string | undefined): string {
       return 'qwen';
     case 'deepseek':
       return 'dsf';
+    case 'deepseek-pro':
+      return 'dsp';
     case 'mock':
       return 'Mock';
     case 'rule':
@@ -413,6 +418,10 @@ export function App() {
 
   const setAiProvider = useCallback((playerId: number, provider: string) => {
     socket.emit('set_ai_provider', { player: playerId, provider });
+  }, []);
+
+  const setAiThinking = useCallback((playerId: number, enabled: boolean) => {
+    socket.emit('set_ai_thinking', { player: playerId, enabled });
   }, []);
 
   const finishAiStepTimer = useCallback((ok: boolean) => {
@@ -790,9 +799,11 @@ export function App() {
           }
           agentProviders={aiControl.agentProviders}
           agentPersonalities={aiControl.agentPersonalities}
+          thinkingByPlayer={aiControl.thinkingByPlayer}
           providerOptions={aiControl.providerOptions}
           connected={connected}
           onSetProvider={setAiProvider}
+          onSetThinking={setAiThinking}
         />
         <HumanActionPanel
           game={game}
@@ -908,17 +919,21 @@ function Players({
   processingMs,
   agentProviders,
   agentPersonalities,
+  thinkingByPlayer,
   providerOptions,
   connected,
   onSetProvider,
+  onSetThinking,
 }: {
   game: FullGame;
   processingMs: number | null;
   agentProviders: Record<number, string>;
   agentPersonalities: Record<number, string>;
+  thinkingByPlayer: AiControlState['thinkingByPlayer'];
   providerOptions: AiControlState['providerOptions'];
   connected: boolean;
   onSetProvider: (playerId: number, provider: string) => void;
+  onSetThinking: (playerId: number, enabled: boolean) => void;
 }) {
   const { board, state } = game;
   const prevResourcesRef = useRef<Record<number, ResMap>>(
@@ -1014,11 +1029,28 @@ function Players({
                 ))}
               </div>
               <div className="player-badges">
-                {pl.isAI && (
-                  <span className="player-provider-tag">
-                    {providerShortLabel(agentProviders[pl.id])}
-                  </span>
-                )}
+                {pl.isAI && (() => {
+                  const thinking = thinkingByPlayer[pl.id];
+                  const supported = thinking?.supported ?? false;
+                  const enabled = thinking?.enabled ?? false;
+                  return (
+                    <button
+                      type="button"
+                      className={`player-provider-tag${supported ? ' clickable' : ''}${enabled ? ' thinking-on' : ''}`}
+                      disabled={!supported || !connected}
+                      onClick={supported ? () => onSetThinking(pl.id, !enabled) : undefined}
+                      title={
+                        !supported
+                          ? '该 provider 不支持 thinking 切换'
+                          : enabled
+                            ? '点击关闭 thinking 模式（更快）'
+                            : '点击开启 thinking 模式（更慢但更准）'
+                      }
+                    >
+                      {providerShortLabel(agentProviders[pl.id])}
+                    </button>
+                  );
+                })()}
                 {state.current === pl.id && processingMs != null && (
                   <span className="player-time">
                     {Math.round(processingMs / 1000)}秒

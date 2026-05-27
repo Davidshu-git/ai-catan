@@ -39,6 +39,8 @@ export interface AgentSnapshot {
   providerName: string;
   currentTurnGoal?: string;
   stance?: string;
+  /** undefined 表示无覆盖，沿用 spec 默认 */
+  thinking?: boolean;
 }
 
 export interface SessionSnapshot {
@@ -104,6 +106,7 @@ function agentSnapshot(agent: AiAgentRuntime): AgentSnapshot {
     providerName: agent.providerName,
     currentTurnGoal: agent.currentTurnGoal,
     stance: agent.stance,
+    thinking: agent.thinking,
   };
 }
 

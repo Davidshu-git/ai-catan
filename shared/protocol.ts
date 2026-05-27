@@ -155,6 +155,14 @@ export interface AiControlState {
   /** 各 AI 席位的角色策略提示词（即 LLM prompt 内 agent.personality 字段）；前端用作悬浮提示 */
   agentPersonalities: Record<number, string>;
   /**
+   * 各 AI 席位的 thinking 模式状态。
+   * - supported=true 表示该 provider 是注册表里的 LLM（rule/mock 都是 false）
+   * - enabled 是有效值：agent 覆盖值优先，无覆盖则取 spec.enableThinking
+   * 仅影响该 agent 的决策路径（buildProvider→createQwenProvider/createLlmProvider）；
+   * 交易/社交 LLM 仍读 spec 默认，不随 agent 覆盖。
+   */
+  thinkingByPlayer: Record<number, { enabled: boolean; supported: boolean }>;
+  /**
    * 自由社交聊天（嘴炮/结盟/威胁）总开关。默认开；前端可通过 set_social_chat 实时熄火。
    * 关闭时不触发任何社交 LLM 调用，是防 token 失控的实时刹车。关系账本（确定性、零 LLM）不受影响。
    */

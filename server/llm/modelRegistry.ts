@@ -72,9 +72,21 @@ export const LLM_MODELS: LlmModelSpec[] = [
     model: process.env.DEEPSEEK_MODEL ?? 'deepseek-v4-flash',
     endpoint: process.env.DEEPSEEK_BASE_URL ?? 'https://api.deepseek.com/v1',
     apiKeyEnv: 'DEEPSEEK_API_KEY',
-    aliases: ['deepseek-v4-flash', 'deepseek-flash', 'ds'],
+    aliases: ['deepseek-v4-flash', 'deepseek-flash', 'dsf', 'ds'],
     enableThinking: false,
     labelPrefix: 'deepseek',
+  },
+
+  {
+    key: 'deepseek-pro',
+    label: `DeepSeek ${process.env.DEEPSEEK_PRO_MODEL ?? 'deepseek-v4-pro'}`,
+    api: 'openai',
+    model: process.env.DEEPSEEK_PRO_MODEL ?? 'deepseek-v4-pro',
+    endpoint: process.env.DEEPSEEK_BASE_URL ?? 'https://api.deepseek.com/v1',
+    apiKeyEnv: 'DEEPSEEK_API_KEY',
+    aliases: ['deepseek-v4-pro', 'dsp'],
+    enableThinking: false,
+    labelPrefix: 'deepseek-pro',
   },
 
   // ── MiniMax 已退役（订阅失效，2026-05-25）──────────────────────────────

@@ -297,6 +297,7 @@ async function callMinimax(
   apiKey: string,
   host: string,
   model: string,
+  enableThinking: boolean,
   blocks: LlmRequestBlocks,
 ): Promise<string> {
   const ctl = new AbortController();
@@ -321,7 +322,7 @@ async function callMinimax(
         temperature: LLM_TEMPERATURE,
         system: blocks.system,
         messages: [{ role: 'user', content: blocks.userBlocks }],
-        ...(MINIMAX_ENABLE_THINKING ? {} : { thinking: { type: 'disabled' } }),
+        ...(enableThinking ? {} : { thinking: { type: 'disabled' } }),
       }),
     });
     if (!resp.ok) {
@@ -371,17 +372,20 @@ export interface LlmProviderOptions {
   model?: string;
   /** 是否在 prompt 里塞 actionHints；默认读 LLM_HINT 环境变量（缺省/=1 → true，=0 → false） */
   useHint?: boolean;
+  /** 是否开启 thinking；默认走环境变量 MINIMAX_ENABLE_THINKING */
+  enableThinking?: boolean;
 }
 
 export function createLlmProvider(opts: LlmProviderOptions): AiDecisionProvider {
   const host = opts.host ?? DEFAULT_HOST;
   const model = opts.model ?? DEFAULT_MODEL;
   const useHint = opts.useHint ?? LLM_HINT_DEFAULT;
+  const enableThinking = opts.enableThinking ?? MINIMAX_ENABLE_THINKING;
   return {
     name: `llm(${model}${useHint ? '+hint' : ''})`,
     async decide(input: LlmDecisionInput): Promise<LlmDecisionOutput> {
       const blocks = buildLlmRequestBlocks(input, useHint);
-      const raw = await callMinimax(opts.apiKey, host, model, blocks);
+      const raw = await callMinimax(opts.apiKey, host, model, enableThinking, blocks);
       let parsed: unknown;
       try {
         parsed = extractJson(raw);

@@ -21,6 +21,11 @@ export interface AiAgentRuntime {
   currentTurnGoal?: string;
   /** 较慢变化的长期策略阶段 */
   stance?: string;
+  /**
+   * thinking 模式覆盖（仅决策路径生效）。undefined = 用 spec.enableThinking 默认。
+   * 前端「玩家卡 provider 标签点一下」切换这一字段。
+   */
+  thinking?: boolean;
 }
 
 export interface AgentDecisionMemory {

@@ -142,9 +142,10 @@ async function callOpenAi(
     };
     // thinking 开关每家命名不同，按 labelPrefix 分别发：
     // - qwen: 私有字段 enable_thinking: boolean
-    // - deepseek: V4 Flash 是 reasoning 模型，默认开 thinking，必须显式 disabled 否则慢
+    // - deepseek*: V4 系列都是 reasoning 模型，默认开 thinking，必须显式 disabled 否则慢
+    //   （deepseek / deepseek-pro / 后续 deepseek-* 共用同一开关）
     if (labelPrefix === 'qwen') body.enable_thinking = enableThinking;
-    else if (labelPrefix === 'deepseek') body.thinking = { type: enableThinking ? 'enabled' : 'disabled' };
+    else if (labelPrefix.startsWith('deepseek')) body.thinking = { type: enableThinking ? 'enabled' : 'disabled' };
     const resp = await fetch(url, {
       method: 'POST',
       signal: ctl.signal,

@@ -507,6 +507,21 @@ body {
   border-radius: 3px;
   padding: 0 4px;
   line-height: 15px;
+  font-family: inherit;
+}
+.player-provider-tag.clickable {
+  cursor: pointer;
+}
+.player-provider-tag.clickable:hover:not(:disabled) {
+  background: rgba(155, 63, 52, 0.22);
+}
+.player-provider-tag.thinking-on {
+  color: #fff;
+  background: rgba(155, 63, 52, 0.78);
+  border-color: rgba(155, 63, 52, 0.92);
+}
+.player-provider-tag:disabled {
+  opacity: 0.6;
 }
 
 .player-resources {
