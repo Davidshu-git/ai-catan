@@ -883,7 +883,6 @@ function buildProvider(
     useHint,
     labelPrefix: spec.labelPrefix ?? (spec.api === 'openai' ? 'qwen' : undefined),
     enableThinking,
-    maxTokens: spec.maxTokens,
   });
 }
 

@@ -128,7 +128,6 @@ async function callOpenAi(
   model: string,
   enableThinking: boolean,
   labelPrefix: string,
-  maxTokens: number,
   systemPrompt: string,
   userPrompt: string,
 ): Promise<string> {
@@ -143,7 +142,7 @@ async function callOpenAi(
         { role: 'user', content: userPrompt },
       ],
       temperature: LLM_TEMPERATURE,
-      max_tokens: maxTokens,
+      max_tokens: LLM_MAX_TOKENS,
     };
     // thinking 开关每家命名不同，按 labelPrefix 分别发：
     // - qwen: 私有字段 enable_thinking: boolean
@@ -174,8 +173,8 @@ async function callOpenAi(
       const finish = choice?.finish_reason ?? 'unknown';
       if (hasReasoning && finish === 'length') {
         throw new Error(
-          `${labelPrefix} content 为空：reasoning 占满 max_tokens=${maxTokens} 被截断（finish_reason=length）。` +
-            `把该模型的 maxTokens 调大或关 thinking。原始：${JSON.stringify(json).slice(0, 200)}`,
+          `${labelPrefix} content 为空：reasoning 占满 max_tokens=${LLM_MAX_TOKENS} 被截断（finish_reason=length）。` +
+            `调大 .env 里的 LLM_MAX_TOKENS 或关 thinking。原始：${JSON.stringify(json).slice(0, 200)}`,
         );
       }
       throw new Error(`${labelPrefix} 返回无 message.content（finish=${finish}）：${JSON.stringify(json).slice(0, 300)}`);
@@ -204,8 +203,6 @@ export interface QwenProviderOptions {
   labelPrefix?: string;
   /** 是否开启 thinking（仅 qwen 系列实际发送，DeepSeek 等忽略） */
   enableThinking?: boolean;
-  /** max_tokens 上限（仅是上限）。省略时用 LLM_MAX_TOKENS 环境变量。 */
-  maxTokens?: number;
 }
 
 export function createQwenProvider(opts: QwenProviderOptions): AiDecisionProvider {
@@ -214,7 +211,6 @@ export function createQwenProvider(opts: QwenProviderOptions): AiDecisionProvide
   const useHint = opts.useHint ?? LLM_HINT_DEFAULT;
   const labelPrefix = opts.labelPrefix ?? 'qwen';
   const enableThinking = opts.enableThinking ?? QWEN_ENABLE_THINKING;
-  const maxTokens = opts.maxTokens ?? LLM_MAX_TOKENS;
   return {
     name: `${labelPrefix}(${model}${useHint ? '+hint' : ''})`,
     async decide(input: LlmDecisionInput): Promise<LlmDecisionOutput> {
@@ -225,7 +221,6 @@ export function createQwenProvider(opts: QwenProviderOptions): AiDecisionProvide
         model,
         enableThinking,
         labelPrefix,
-        maxTokens,
         LLM_SYSTEM_PROMPT,
         userPrompt,
       );
