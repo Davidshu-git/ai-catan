@@ -34,6 +34,13 @@ export interface LlmModelSpec {
    * 省略时按 api 推断：anthropic→minimax，openai→qwen。
    */
   labelPrefix?: string;
+  /**
+   * 单次决策响应的 max_tokens 上限（仅是上限，未用满不计费）。
+   * 省略时回退到 LLM_MAX_TOKENS 环境变量（默认 1024）。
+   * reasoning 模型（如 deepseek-v4-pro）开 thinking 时需要更大额度，否则
+   * 思考链就把整个预算吃光、content 返回空字符串。
+   */
+  maxTokens?: number;
 }
 
 /** 取本 spec 的 label 前缀（与 AiDecisionProvider.name 前缀 / providerLabel 一致） */
@@ -87,6 +94,8 @@ export const LLM_MODELS: LlmModelSpec[] = [
     aliases: ['deepseek-v4-pro', 'dsp'],
     enableThinking: false,
     labelPrefix: 'deepseek-pro',
+    // pro 是 reasoning 旗舰，thinking 开启时 1024 完全不够 reasoning + 答案
+    maxTokens: 8192,
   },
 
   // ── MiniMax 已退役（订阅失效，2026-05-25）──────────────────────────────

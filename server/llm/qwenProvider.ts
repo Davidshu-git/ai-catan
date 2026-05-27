@@ -33,8 +33,12 @@ const LLM_HINT_DEFAULT = process.env.LLM_HINT !== '0';
 
 interface OpenAiChatResp {
   choices?: Array<{
+    /** finish_reason="length" 表示被 max_tokens 截断 */
+    finish_reason?: string;
     message?: {
       content?: string | Array<{ type?: string; text?: string }>;
+      /** DeepSeek 系列的 chain-of-thought；reasoning 模型默认返 */
+      reasoning_content?: string;
     };
   }>;
   usage?: {
@@ -124,6 +128,7 @@ async function callOpenAi(
   model: string,
   enableThinking: boolean,
   labelPrefix: string,
+  maxTokens: number,
   systemPrompt: string,
   userPrompt: string,
 ): Promise<string> {
@@ -138,7 +143,7 @@ async function callOpenAi(
         { role: 'user', content: userPrompt },
       ],
       temperature: LLM_TEMPERATURE,
-      max_tokens: LLM_MAX_TOKENS,
+      max_tokens: maxTokens,
     };
     // thinking 开关每家命名不同，按 labelPrefix 分别发：
     // - qwen: 私有字段 enable_thinking: boolean
@@ -160,9 +165,20 @@ async function callOpenAi(
       throw new Error(`${labelPrefix} HTTP ${resp.status}: ${respBody.slice(0, 300)}`);
     }
     const json = (await resp.json()) as OpenAiChatResp;
-    const text = contentToText(json.choices?.[0]?.message?.content);
+    const choice = json.choices?.[0];
+    const text = contentToText(choice?.message?.content);
     if (!text) {
-      throw new Error(`${labelPrefix} 返回无 message.content：${JSON.stringify(json).slice(0, 300)}`);
+      // 典型场景：DeepSeek reasoning 模型把 max_tokens 全花在 reasoning_content 上、
+      // content 空且 finish_reason="length"。给一个明确诊断而不是裸 JSON。
+      const hasReasoning = Boolean(choice?.message?.reasoning_content);
+      const finish = choice?.finish_reason ?? 'unknown';
+      if (hasReasoning && finish === 'length') {
+        throw new Error(
+          `${labelPrefix} content 为空：reasoning 占满 max_tokens=${maxTokens} 被截断（finish_reason=length）。` +
+            `把该模型的 maxTokens 调大或关 thinking。原始：${JSON.stringify(json).slice(0, 200)}`,
+        );
+      }
+      throw new Error(`${labelPrefix} 返回无 message.content（finish=${finish}）：${JSON.stringify(json).slice(0, 300)}`);
     }
     recordLlmUsage({
       promptTokens: json.usage?.prompt_tokens,
@@ -188,6 +204,8 @@ export interface QwenProviderOptions {
   labelPrefix?: string;
   /** 是否开启 thinking（仅 qwen 系列实际发送，DeepSeek 等忽略） */
   enableThinking?: boolean;
+  /** max_tokens 上限（仅是上限）。省略时用 LLM_MAX_TOKENS 环境变量。 */
+  maxTokens?: number;
 }
 
 export function createQwenProvider(opts: QwenProviderOptions): AiDecisionProvider {
@@ -196,6 +214,7 @@ export function createQwenProvider(opts: QwenProviderOptions): AiDecisionProvide
   const useHint = opts.useHint ?? LLM_HINT_DEFAULT;
   const labelPrefix = opts.labelPrefix ?? 'qwen';
   const enableThinking = opts.enableThinking ?? QWEN_ENABLE_THINKING;
+  const maxTokens = opts.maxTokens ?? LLM_MAX_TOKENS;
   return {
     name: `${labelPrefix}(${model}${useHint ? '+hint' : ''})`,
     async decide(input: LlmDecisionInput): Promise<LlmDecisionOutput> {
@@ -206,6 +225,7 @@ export function createQwenProvider(opts: QwenProviderOptions): AiDecisionProvide
         model,
         enableThinking,
         labelPrefix,
+        maxTokens,
         LLM_SYSTEM_PROMPT,
         userPrompt,
       );
