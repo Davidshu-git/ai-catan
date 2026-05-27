@@ -9,6 +9,7 @@ import type { AiModelContextEvent, SocialChatKind } from '../../shared/protocol'
 import { playerDisplayName } from '../../shared/state';
 import type { GameState } from '../../shared/types';
 import { callLlm, extractJson, providerLabel, isLlmProvider } from './tradeProvider';
+import { CATAN_RULES_BLOCK } from './llmProvider';
 import type { AgentPromptContext } from './types';
 
 export interface SocialLineInput {
@@ -33,7 +34,10 @@ export interface SocialLineOutput {
 }
 
 const SOCIAL_SYSTEM = `你是卡坦岛牌桌上的一名玩家，要说一句简短的社交发言（嘴炮/拉拢结盟/威胁/炫耀/闲聊）。
-要求：①只说一句中文，不超过 30 字，符合你的性格；②不要泄露隐藏手牌或具体数字策略；③这是口头喊话，不改变任何游戏规则。
+
+${CATAN_RULES_BLOCK}
+
+社交发言本路径要求：①只说一句中文，不超过 30 字，符合你的性格；②不要泄露隐藏手牌或具体数字策略；③这是口头喊话，不改变任何游戏规则。
 严格输出 JSON：{"kind":"taunt|ally|threat|gloat|chat","message":"……"}`;
 
 const KINDS: SocialChatKind[] = ['taunt', 'ally', 'threat', 'gloat', 'chat'];

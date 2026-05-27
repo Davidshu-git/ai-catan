@@ -57,7 +57,9 @@ function vertexResourceKinds(b: Board, vertexId: number): Set<Resource> {
 function portText(b: Board, vertexId: number): string {
   const v = b.vertices[vertexId];
   if (!v || !v.port) return '';
-  return v.port === '通用' ? ' 港口(通用3:1)' : ` 港口(${v.port}2:1)`;
+  // 加方向箭头避免歧义：港口只是兑换折扣，不产资源。
+  // 通用港口：3 张同种资源 → 1 张任意；专属港口：2 张该资源 → 1 张任意。
+  return v.port === '通用' ? ' 港口(任意3→任意1)' : ` 港口(${v.port}2→任意1)`;
 }
 
 function distanceRuleText(b: Board, s: GameState, vertexId: number): string {
