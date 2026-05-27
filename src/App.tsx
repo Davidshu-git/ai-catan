@@ -256,6 +256,7 @@ function readStoredSidebarWidth(): number {
 function normalizeProviderKey(provider: string | undefined): string {
   const p = (provider ?? '').toLowerCase();
   if (p === 'qwen' || p === 'qwen36' || p.startsWith('qwen(')) return 'qwen36';
+  if (p === 'deepseek' || p === 'ds' || p.startsWith('deepseek(')) return 'deepseek';
   if (p === 'mock') return 'mock';
   if (p === 'rule') return 'rule';
   if (p === 'human') return 'human';
@@ -268,6 +269,8 @@ function providerShortLabel(provider: string | undefined): string {
       return '真人';
     case 'qwen36':
       return 'qwen';
+    case 'deepseek':
+      return 'dsf';
     case 'mock':
       return 'Mock';
     case 'rule':

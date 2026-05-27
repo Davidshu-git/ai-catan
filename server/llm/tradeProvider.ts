@@ -507,22 +507,26 @@ export async function callLlm(providerName: string, system: string, user: string
       return text;
     }
 
-    // openai 兼容（qwen 等）
+    // openai 兼容（qwen / deepseek 等）
     const url = `${spec.endpoint.replace(/\/+$/, '')}/chat/completions`;
+    const prefix = spec.labelPrefix ?? 'qwen';
+    const reqBody: Record<string, unknown> = {
+      model: spec.model,
+      messages: [
+        { role: 'system', content: system },
+        { role: 'user', content: user },
+      ],
+      max_tokens: 256,
+      temperature: TRADE_TEMPERATURE,
+    };
+    // thinking 开关每家命名不同，详见 qwenProvider.callOpenAi
+    if (prefix === 'qwen') reqBody.enable_thinking = spec.enableThinking;
+    else if (prefix === 'deepseek') reqBody.thinking = { type: spec.enableThinking ? 'enabled' : 'disabled' };
     const resp = await fetch(url, {
       method: 'POST',
       signal: ctl.signal,
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
-      body: JSON.stringify({
-        model: spec.model,
-        messages: [
-          { role: 'system', content: system },
-          { role: 'user', content: user },
-        ],
-        max_tokens: 256,
-        temperature: TRADE_TEMPERATURE,
-        enable_thinking: spec.enableThinking,
-      }),
+      body: JSON.stringify(reqBody),
     });
     if (!resp.ok) {
       const body = await resp.text().catch(() => '');

@@ -22,6 +22,7 @@ import {
   formatView,
   LLM_SYSTEM_PROMPT,
 } from './llmProvider';
+import { isLlmAdapterName } from './modelRegistry';
 import type {
   AiDecisionProvider,
   AiErrorEvent,
@@ -312,7 +313,7 @@ function buildModelContext(
   const legalActionsText = formatLegalActions(input.legalActions, promptUseHint);
   const retryFeedbackCount = input.retryFeedback?.length ?? 0;
 
-  if (providerName.startsWith('llm(') || providerName.startsWith('qwen(')) {
+  if (isLlmAdapterName(providerName)) {
     const userPrompt = buildLlmUserMessage(input, promptUseHint);
     const systemPrompt = LLM_SYSTEM_PROMPT;
     return {
@@ -373,7 +374,7 @@ function buildModelOutput(
     2,
   );
   // 只有真实 LLM Provider 会带原始文本；rule/mock 仅有结构化决策
-  const isLlm = providerName.startsWith('llm(') || providerName.startsWith('qwen(');
+  const isLlm = isLlmAdapterName(providerName);
   const raw = isLlm ? output.raw : undefined;
   return {
     provider: providerName,

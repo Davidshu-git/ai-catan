@@ -29,6 +29,17 @@ export interface LlmModelSpec {
   aliases: string[];
   /** 是否开启 thinking（trade/social 的 callLlm 用；decision adapter 自身另读 env） */
   enableThinking: boolean;
+  /**
+   * AiDecisionProvider.name / providerLabel 前缀（如 "qwen" / "deepseek" / "minimax"）。
+   * 省略时按 api 推断：anthropic→minimax，openai→qwen。
+   */
+  labelPrefix?: string;
+}
+
+/** 取本 spec 的 label 前缀（与 AiDecisionProvider.name 前缀 / providerLabel 一致） */
+export function labelPrefixOf(spec: LlmModelSpec): string {
+  if (spec.labelPrefix) return spec.labelPrefix;
+  return spec.api === 'anthropic' ? 'minimax' : 'qwen';
 }
 
 /** 内置非 LLM provider（不在注册表里，单独处理） */
@@ -51,6 +62,19 @@ export const LLM_MODELS: LlmModelSpec[] = [
     apiKeyEnv: 'ALI_CODING_PLAN_KEY',
     aliases: ['qwen', 'qwen3.6', 'qwen3.6-plus'],
     enableThinking: process.env.QWEN_ENABLE_THINKING === '1',
+    labelPrefix: 'qwen',
+  },
+
+  {
+    key: 'deepseek',
+    label: `DeepSeek ${process.env.DEEPSEEK_MODEL ?? 'deepseek-v4-flash'}`,
+    api: 'openai',
+    model: process.env.DEEPSEEK_MODEL ?? 'deepseek-v4-flash',
+    endpoint: process.env.DEEPSEEK_BASE_URL ?? 'https://api.deepseek.com/v1',
+    apiKeyEnv: 'DEEPSEEK_API_KEY',
+    aliases: ['deepseek-v4-flash', 'deepseek-flash', 'ds'],
+    enableThinking: false,
+    labelPrefix: 'deepseek',
   },
 
   // ── MiniMax 已退役（订阅失效，2026-05-25）──────────────────────────────
@@ -117,6 +141,18 @@ export function llmModelOptions(): Array<{
 export function providerLabel(key: string): string {
   const m = findModel(key);
   if (!m) return key;
-  const prefix = m.api === 'anthropic' ? 'minimax' : 'qwen';
-  return `${prefix}(${m.model})`;
+  return `${labelPrefixOf(m)}(${m.model})`;
+}
+
+/**
+ * 判断 AiDecisionProvider.name（如 "qwen(qwen3.6-plus+hint)" / "deepseek(deepseek-v4-flash)"）
+ * 是否对应注册表里某个 LLM adapter。controller / observability 用它区分
+ * "真 LLM（有 system+user prompt 可展示）" vs "rule/mock（结构化输入）"。
+ */
+export function isLlmAdapterName(name: string): boolean {
+  if (!name) return false;
+  const m = name.match(/^([a-z0-9-]+)\(/i);
+  if (!m) return false;
+  const prefix = m[1].toLowerCase();
+  return LLM_MODELS.some((spec) => labelPrefixOf(spec) === prefix);
 }

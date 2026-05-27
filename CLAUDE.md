@@ -78,7 +78,7 @@ server/                ← Node + socket.io 后端，持有上帝视角状态、
     mockProvider.ts    按优先级（建城 > 房屋 > 路 > 买卡 > 银行兑换 > 发展卡 > END_TURN）选 actionId
     modelRegistry.ts   LLM 模型注册表（单一事实来源）：key/label/api 形态/model/endpoint/apiKeyEnv/别名；buildProvider、callLlm、前端选项、别名归一全从此派生。加/停模型只动这里
     llmProvider.ts     anthropic 兼容 adapter（裸 fetch + JSON 严格输出 + 多策略解析）。原 MiniMax 用；MiniMax 已退役但 adapter 保留给后续 anthropic 形态模型
-    qwenProvider.ts    openai 兼容 adapter；阿里 Qwen（qwen3.6-plus 默认，当前默认 LLM）
+    qwenProvider.ts    openai 兼容 adapter；阿里 Qwen（qwen3.6-plus 默认，当前默认 LLM）+ DeepSeek V4 Flash 复用同一 adapter，按 labelPrefix 区分 provider 名
     controller.ts      decideAiStep：编排 catalog → view → provider → check → apply，含重试 + fallback
   llmSmoke.ts          单次 LLM 调用冒烟（不走游戏循环，仅验证 API 链路）
   Dockerfile           生产镜像（node:20-alpine + tsx 直跑 TS）
@@ -149,10 +149,11 @@ LLM prompt / hint 里的骰点概率权重统一叫**产出点**，不要再写�
 **AI 驱动循环在 `server/index.ts` 的 `scheduleAI()` → `decideAiStep()`（在 `server/llm/controller.ts`）。** 当前默认 `PLAYER_MODE=all-ai`：server 创建新局后把 4 个席位都设为 AI，并在 `Session.agents` 里为 P0/P1/P2/P3 各建一个独立 `AiAgentRuntime`（性格、短期记忆、providerName、decisionCount）。流程：①按当前玩家取对应 agent → ②生成 legalActions（actionCatalog）+ playerView（stateTranslator）+ agent personality/memory → ③喂给 `AiDecisionProvider`（由 agent.providerName 初始化自 `AI_PROVIDER`，可按玩家拆分）→ ④用 `actionChecker` 三层校验 → ⑤校验过则 apply 新状态 + 广播 `ai_thought`，并把 thought/action 写回该 agent 的 memory；不过则带反馈重试最多 2 次 → ⑥仍不过 fallback 到 ruleProvider；最终极端兜底强制 `END_TURN`。**discard 阶段不喂 Provider**：组合爆炸，直接走规则 AI 兜底。**含状态指纹防卡死兜底**：连续 8 次同指纹则强制 `END_TURN`（sim.ts 用同样指纹、阈值 600）。**改 AI 的铁律：`aiMain` 必须始终推进或最终 `END_TURN`，绝不能持续返回一个会被 reducer no-op 的动作。**
 
 **Provider 抽象（重要）：**
-- **模型注册表 `llm/modelRegistry.ts` 是 LLM 模型的单一事实来源。** 每个模型一条 `LlmModelSpec`：`key` / `label` / `api`（`anthropic`|`openai`，决定走哪个 adapter）/ `model` / `endpoint` / `apiKeyEnv` / `aliases` / `enableThinking`。`buildProvider`（决策）、`tradeProvider.callLlm`（交易/社交）、前端 provider 选项（`llmModelOptions`）、别名归一（`resolveProviderKey`）、`isLlmProvider` 全部从这里派生。**加模型 = 加一条（复用现有 adapter，新 API 形态才写 adapter）；停模型 = 删/注释该条。** rule/mock 是内置非 LLM provider，不在表里。
+- **模型注册表 `llm/modelRegistry.ts` 是 LLM 模型的单一事实来源。** 每个模型一条 `LlmModelSpec`：`key` / `label` / `api`（`anthropic`|`openai`，决定走哪个 adapter）/ `model` / `endpoint` / `apiKeyEnv` / `aliases` / `enableThinking` / `labelPrefix`（决定 `AiDecisionProvider.name` 与 `providerLabel` 前缀，省略时按 api 推断）。`buildProvider`（决策）、`tradeProvider.callLlm`（交易/社交）、前端 provider 选项（`llmModelOptions`）、别名归一（`resolveProviderKey`）、`isLlmProvider` / `isLlmAdapterName` 全部从这里派生。**加模型 = 加一条（复用现有 adapter，新 API 形态才写 adapter）；停模型 = 删/注释该条。** rule/mock 是内置非 LLM provider，不在表里。
 - `rule` Provider：包 `aiNextAction`，把动作 deep-equal 反查到 `legalActions` 中的 actionId。
 - `mock` Provider：按优先级从 legalActions 里挑，不接 LLM 也能跑通整条链路；用于压测和无 API 调试。
 - `qwen36` Provider（**当前默认 LLM**）：openai 兼容 adapter（`qwenProvider.ts`），调阿里 `qwen3.6-plus`，端点 `https://coding.dashscope.aliyuncs.com/v1/chat/completions`，读取 `ALI_CODING_PLAN_KEY`。前端玩家卡片上可按 AI 席位独立切换 provider。
+- `deepseek` Provider：openai 兼容 adapter（复用 `qwenProvider.ts`，`labelPrefix='deepseek'`），调 DeepSeek `deepseek-v4-flash`，端点 `https://api.deepseek.com/v1/chat/completions`，读取 `DEEPSEEK_API_KEY`。`enable_thinking` 是 Qwen 私有字段，DeepSeek 不接收（adapter 按 labelPrefix 判定是否发送）。
 - `minimax` Provider（anthropic 兼容 adapter `llmProvider.ts`）：**已退役（订阅失效，2026-05-25），从注册表移除**——`AI_PROVIDER=minimax`/`llm` 现归一到 `rule`。adapter 代码保留；重启用见 `modelRegistry.ts` 里注释掉的那条 + `.env.example`。
 - 任何 LLM 缺对应 `apiKeyEnv` 时 `buildProvider` 自动降级到 rule 并打 warn，stack 不会因此挂。
 - LLM 不直接生成 `Action`，**永远是从 server 生成的 `legalActions` 里挑 `actionId`**。这是降低乱编坐标 / 破坏状态机风险的关键设计，新增 Provider 时不要绕过这条约束。

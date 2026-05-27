@@ -118,10 +118,12 @@ function contentToText(
   return '';
 }
 
-async function callQwen(
+async function callOpenAi(
   apiKey: string,
   baseUrl: string,
   model: string,
+  enableThinking: boolean,
+  labelPrefix: string,
   systemPrompt: string,
   userPrompt: string,
 ): Promise<string> {
@@ -129,6 +131,20 @@ async function callQwen(
   const timer = setTimeout(() => ctl.abort(), LLM_TIMEOUT_MS);
   const url = `${baseUrl.replace(/\/+$/, '')}/chat/completions`;
   try {
+    const body: Record<string, unknown> = {
+      model,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt },
+      ],
+      temperature: LLM_TEMPERATURE,
+      max_tokens: LLM_MAX_TOKENS,
+    };
+    // thinking 开关每家命名不同，按 labelPrefix 分别发：
+    // - qwen: 私有字段 enable_thinking: boolean
+    // - deepseek: V4 Flash 是 reasoning 模型，默认开 thinking，必须显式 disabled 否则慢
+    if (labelPrefix === 'qwen') body.enable_thinking = enableThinking;
+    else if (labelPrefix === 'deepseek') body.thinking = { type: enableThinking ? 'enabled' : 'disabled' };
     const resp = await fetch(url, {
       method: 'POST',
       signal: ctl.signal,
@@ -136,25 +152,16 @@ async function callQwen(
         'Content-Type': 'application/json',
         Authorization: `Bearer ${apiKey}`,
       },
-      body: JSON.stringify({
-        model,
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userPrompt },
-        ],
-        temperature: LLM_TEMPERATURE,
-        max_tokens: LLM_MAX_TOKENS,
-        enable_thinking: QWEN_ENABLE_THINKING,
-      }),
+      body: JSON.stringify(body),
     });
     if (!resp.ok) {
-      const body = await resp.text().catch(() => '');
-      throw new Error(`Qwen HTTP ${resp.status}: ${body.slice(0, 300)}`);
+      const respBody = await resp.text().catch(() => '');
+      throw new Error(`${labelPrefix} HTTP ${resp.status}: ${respBody.slice(0, 300)}`);
     }
     const json = (await resp.json()) as OpenAiChatResp;
     const text = contentToText(json.choices?.[0]?.message?.content);
     if (!text) {
-      throw new Error(`Qwen 返回无 message.content：${JSON.stringify(json).slice(0, 300)}`);
+      throw new Error(`${labelPrefix} 返回无 message.content：${JSON.stringify(json).slice(0, 300)}`);
     }
     recordLlmUsage({
       promptTokens: json.usage?.prompt_tokens,
@@ -163,7 +170,7 @@ async function callQwen(
     return text;
   } catch (err) {
     if ((err as Error).name === 'AbortError') {
-      throw new Error(`Qwen 调用超时（>${LLM_TIMEOUT_MS}ms）`);
+      throw new Error(`${labelPrefix} 调用超时（>${LLM_TIMEOUT_MS}ms）`);
     }
     throw err;
   } finally {
@@ -176,17 +183,31 @@ export interface QwenProviderOptions {
   baseUrl?: string;
   model?: string;
   useHint?: boolean;
+  /** AiDecisionProvider.name 前缀（如 "qwen" / "deepseek"），默认 "qwen" */
+  labelPrefix?: string;
+  /** 是否开启 thinking（仅 qwen 系列实际发送，DeepSeek 等忽略） */
+  enableThinking?: boolean;
 }
 
 export function createQwenProvider(opts: QwenProviderOptions): AiDecisionProvider {
   const baseUrl = opts.baseUrl ?? DEFAULT_BASE_URL;
   const model = opts.model ?? DEFAULT_MODEL;
   const useHint = opts.useHint ?? LLM_HINT_DEFAULT;
+  const labelPrefix = opts.labelPrefix ?? 'qwen';
+  const enableThinking = opts.enableThinking ?? QWEN_ENABLE_THINKING;
   return {
-    name: `qwen(${model}${useHint ? '+hint' : ''})`,
+    name: `${labelPrefix}(${model}${useHint ? '+hint' : ''})`,
     async decide(input: LlmDecisionInput): Promise<LlmDecisionOutput> {
       const userPrompt = buildLlmUserMessage(input, useHint);
-      const raw = await callQwen(opts.apiKey, baseUrl, model, LLM_SYSTEM_PROMPT, userPrompt);
+      const raw = await callOpenAi(
+        opts.apiKey,
+        baseUrl,
+        model,
+        enableThinking,
+        labelPrefix,
+        LLM_SYSTEM_PROMPT,
+        userPrompt,
+      );
       return { ...parseDecision(raw), raw };
     },
   };

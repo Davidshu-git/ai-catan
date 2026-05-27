@@ -866,7 +866,14 @@ function buildProvider(
   if (spec.api === 'anthropic') {
     return createLlmProvider({ apiKey, host: spec.endpoint, model: spec.model, useHint });
   }
-  return createQwenProvider({ apiKey, baseUrl: spec.endpoint, model: spec.model, useHint });
+  return createQwenProvider({
+    apiKey,
+    baseUrl: spec.endpoint,
+    model: spec.model,
+    useHint,
+    labelPrefix: spec.labelPrefix ?? (spec.api === 'openai' ? 'qwen' : undefined),
+    enableThinking: spec.enableThinking,
+  });
 }
 
 // 事件驱动的 AI 驱动循环：每次 dispatch 后调用；非 AI 回合 / gameOver 自然停。

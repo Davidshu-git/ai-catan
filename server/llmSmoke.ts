@@ -2,34 +2,38 @@
 // 用法（容器内、网络外，因为 LLM 是公网端点）：
 //   docker run --rm --env-file .env -v "$PWD":/app -w /app node:20-alpine \
 //     sh -c "npm install --no-fund --no-audit --silent && npx tsx server/llmSmoke.ts"
-// 可用 AI_PROVIDER=qwen36（默认）；minimax 已退役，但 anthropic adapter 仍在，
-// 设 AI_PROVIDER=minimax + 填 MINIMAX_API_KEY 仍可手动走该 adapter。
+// AI_PROVIDER 取注册表 key（qwen36 / deepseek / ...）；旧 minimax 已退役，但 anthropic
+// adapter 仍在，重订阅时取消 modelRegistry.ts 注释并设 AI_PROVIDER=minimax 仍可走。
 
 import { createLlmProvider } from './llm/llmProvider';
 import { createQwenProvider } from './llm/qwenProvider';
-import type { LegalAction, LlmDecisionInput } from './llm/types';
+import { findModel, resolveProviderKey } from './llm/modelRegistry';
+import type { AiDecisionProvider, LegalAction, LlmDecisionInput } from './llm/types';
 import type { PlayerView } from './llm/stateTranslator';
 import { COSTS } from '../shared/types';
 
-const providerName = (process.env.AI_PROVIDER ?? 'qwen36').toLowerCase();
-const provider =
-  providerName === 'qwen36' || providerName === 'qwen' || providerName === 'qwen3.6-plus'
-    ? (() => {
-        const apiKey = process.env.ALI_CODING_PLAN_KEY;
-        if (!apiKey) {
-          console.error('❌ 缺 ALI_CODING_PLAN_KEY（请确认 .env / 容器 --env-file）');
-          process.exit(1);
-        }
-        return createQwenProvider({ apiKey, useHint: false });
-      })()
-    : (() => {
-        const apiKey = process.env.MINIMAX_API_KEY;
-        if (!apiKey) {
-          console.error('❌ 缺 MINIMAX_API_KEY（请确认 .env / 容器 --env-file）');
-          process.exit(1);
-        }
-        return createLlmProvider({ apiKey, useHint: false });
-      })();
+const providerRaw = (process.env.AI_PROVIDER ?? 'qwen36').toLowerCase();
+const spec = findModel(resolveProviderKey(providerRaw));
+if (!spec) {
+  console.error(`❌ AI_PROVIDER="${providerRaw}" 不是已注册的 LLM 模型（见 modelRegistry.ts）`);
+  process.exit(1);
+}
+const apiKey = process.env[spec.apiKeyEnv];
+if (!apiKey) {
+  console.error(`❌ ${spec.label} 缺 ${spec.apiKeyEnv}（请确认 .env / 容器 --env-file）`);
+  process.exit(1);
+}
+const provider: AiDecisionProvider =
+  spec.api === 'anthropic'
+    ? createLlmProvider({ apiKey, host: spec.endpoint, model: spec.model, useHint: false })
+    : createQwenProvider({
+        apiKey,
+        baseUrl: spec.endpoint,
+        model: spec.model,
+        useHint: false,
+        labelPrefix: spec.labelPrefix,
+        enableThinking: spec.enableThinking,
+      });
 
 // 伪造一个 main 阶段的最小 view + 3 个 legalActions
 const view: PlayerView = {
