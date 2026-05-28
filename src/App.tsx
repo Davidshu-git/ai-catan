@@ -1030,7 +1030,7 @@ function Players({
                   牌
                 </span>
                 <span>
-                  <b>{pl.devCards.length + pl.newDevCards.length}</b>
+                  <b>{pl.devCards.length + pl.newDevCards.length + pl.vpCards}</b>
                   卡
                 </span>
                 <span>

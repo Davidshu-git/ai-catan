@@ -51,7 +51,7 @@ export interface OtherPlayerView {
   handSize: number;
   /** 若之后有人掷出 7，该玩家按当前手牌数需要弃掉的数量 */
   discardOnSeven: number;
-  /** 发展卡总数（不暴露 victory 等具体类别） */
+  /** 发展卡总数（含隐藏胜利点卡，避免通过"买了却没增加"反推 VP）；不暴露具体类别 */
   devCardCount: number;
   knightsPlayed: number;
   publicVP: number;
@@ -201,7 +201,7 @@ export function buildPlayerView(b: Board, s: GameState, me: number): PlayerView 
           isAI: p.isAI,
           handSize: h,
           discardOnSeven: h > 7 ? Math.floor(h / 2) : 0,
-          devCardCount: p.devCards.length + p.newDevCards.length,
+          devCardCount: p.devCards.length + p.newDevCards.length + p.vpCards,
           knightsPlayed: p.knightsPlayed,
           publicVP: publicVP(s, p.id),
           settlements: settle,
